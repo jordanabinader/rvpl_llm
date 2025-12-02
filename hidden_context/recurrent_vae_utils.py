@@ -357,6 +357,7 @@ class RecurrentVAETrainer(Trainer):
         beta_max: float = 0.1,
         beta_cycles: int = 4,
         temporal_gamma: float = 1.1, # Weight later timesteps more
+        free_bits: float = 6.4, # Free bits threshold for KL divergence
         **kwargs
     ):
         super().__init__(*args, **kwargs)
@@ -364,6 +365,7 @@ class RecurrentVAETrainer(Trainer):
         self.seq_length = seq_length
         self.latent_dim = latent_dim
         self.temporal_gamma = temporal_gamma
+        self.free_bits = free_bits
         
         # Estimate total steps based on dataset size and batch size
         # This is an approximation; Trainer usually handles this but we need it for annealing
@@ -379,6 +381,7 @@ class RecurrentVAETrainer(Trainer):
         print(f"  Seq Length: {seq_length}")
         print(f"  Temporal Gamma: {temporal_gamma}")
         print(f"  Cyclical Annealing: Max Beta {beta_max}, Cycles {beta_cycles}")
+        print(f"  Free Bits Threshold: {free_bits}")
     
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         embeddings_chosen = inputs['embeddings_chosen']
@@ -436,8 +439,8 @@ class RecurrentVAETrainer(Trainer):
                 kl_loss = recursive_kl_div(curr_mu, curr_logvar, prev_mu, prev_logvar)
             
             # 3. KL Threshold (Free Bits) - prevents crushing small useful info
-            # Only penalize if KL > 0.05
-            kl_threshold = 0.05
+            # Only penalize if KL > threshold (configurable, default 6.4 = 0.1 per dimension * 64)
+            kl_threshold = self.free_bits
             kl_loss_clipped = torch.max(kl_loss, torch.tensor(kl_threshold).to(device))
             # We subtract threshold so the gradient is zero when below threshold, 
             # but we add it back to the metric so we see the real KL

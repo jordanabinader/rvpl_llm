@@ -79,6 +79,10 @@ class ScriptArguments:
         default=1.1,
         metadata={"help": "Weight multiplier for subsequent timesteps (1.0 = equal weighting)"}
     )
+    free_bits: float = field(
+        default=6.4,
+        metadata={"help": "Free bits threshold for KL divergence (total across all dimensions)"}
+    )
     # ---------------------------------------------
     
     # Training arguments
@@ -93,7 +97,7 @@ class ScriptArguments:
         metadata={"help": "Evaluate every N steps"}
     )
     save_steps: int = field(
-        default=500,
+        default=1000,
         metadata={"help": "Save checkpoint every N steps"}
     )
     
@@ -278,7 +282,8 @@ if __name__ == "__main__":
         # New arguments:
         beta_max=script_args.beta_max,
         beta_cycles=script_args.beta_cycles,
-        temporal_gamma=script_args.temporal_gamma
+        temporal_gamma=script_args.temporal_gamma,
+        free_bits=script_args.free_bits
     )
     
     # Add callback for first-step evaluation
