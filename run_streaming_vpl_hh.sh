@@ -24,11 +24,13 @@ module load miniforge
 
 # Activate your Python environment
 source vnev/bin/activate
-# Avoid Rust build failures for tokenizers
-python -m pip install "tokenizers==0.13.3"
 
-# Core HF stack
-python -m pip install "torch" "transformers[torch]" accelerate
+# Install compatible versions
+# Remove the old tokenizers downgrade - it causes conflicts!
+python -m pip install --upgrade pip
+
+# Core HF stack with compatible versions
+python -m pip install "torch>=2.0" "transformers>=4.40,<4.50" "tokenizers>=0.19,<0.22" "peft>=0.10.0" "accelerate>=0.20"
 
 # Extra utilities
 python -m pip install numpy sentencepiece datasets
@@ -39,6 +41,7 @@ python -m pip install wandb
 echo "Node: $(hostname)"
 echo "GPUs visible to this job:"
 nvidia-smi || echo "nvidia-smi not found"
+
 #########################
 # Training              #
 #########################
