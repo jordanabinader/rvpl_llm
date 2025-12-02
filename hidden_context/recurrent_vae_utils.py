@@ -91,27 +91,27 @@ class RecurrentVPLEncoder(nn.Module):
         # Step 1: Comparison logic (with non-linearity)
         # Reuse PairEncoder from vae_utils.py which has LeakyReLU
         # self.pair_encoder = PairEncoder(embed_dim, hidden_dim, latent_dim)
-        # Todo
-        # Instead of mapping to latent_dim directly, map to a smaller 'observation dim'
-        # This forces the GRU to do the heavy lifting of integration, not just copying.
-        self.obs_dim = 64 # significantly smaller than 512
+        # Inverted Funnel Architecture (Fix #4):
+        # - Wider observation layer (256) to capture detail from embeddings
+        # - Narrower latent bottleneck (64) to force compression
+        self.obs_dim = 256  # Increased from 64 to capture more detail
         
-        # Reuse PairEncoder logic but map to obs_dim
+        # Reuse PairEncoder logic but map to wider obs_dim
         self.pair_encoder = nn.Sequential(
             nn.Linear(2 * embed_dim, hidden_dim),
             nn.LeakyReLU(0.2),
-            nn.Linear(hidden_dim, self.obs_dim), # Output smaller feature
+            nn.Linear(hidden_dim, self.obs_dim),  # Output wider feature
             nn.LeakyReLU(0.2)
         )
         
-        # Step 2: Memory logic (belief update)
-        self.gru = nn.GRUCell(self.obs_dim, latent_dim)
+        # Step 2: Memory logic (belief update) - LSTM instead of GRU (Fix #5)
+        self.lstm = nn.LSTMCell(self.obs_dim, latent_dim)
         
         # Step 3: VAE projection
         self.fc_mu = nn.Linear(latent_dim, latent_dim)
         self.fc_logvar = nn.Linear(latent_dim, latent_dim)
     
-    def forward(self, e_chosen, e_rejected, h_prev):
+    def forward(self, e_chosen, e_rejected, h_prev, c_prev):
         """
         Process one timestep of the sequence.
         
@@ -119,24 +119,26 @@ class RecurrentVPLEncoder(nn.Module):
             e_chosen: Embeddings of chosen option [batch, embed_dim]
             e_rejected: Embeddings of rejected option [batch, embed_dim]
             h_prev: Previous hidden state [batch, latent_dim]
+            c_prev: Previous cell state [batch, latent_dim]
         
         Returns:
             mu: Belief mean [batch, latent_dim]
             logvar: Belief log variance [batch, latent_dim]
             h_curr: Current hidden state [batch, latent_dim]
+            c_curr: Current cell state [batch, latent_dim]
         """
         pair_embed = torch.cat([e_chosen, e_rejected], dim=-1)
         # Step 1: Encode the comparison (observation)
-        obs_feat = self.pair_encoder(pair_embed)  # [batch, latent_dim]
+        obs_feat = self.pair_encoder(pair_embed)  # [batch, obs_dim]
         
-        # Step 2: Update hidden state (belief update via GRU)
-        h_curr = self.gru(obs_feat, h_prev)  # [batch, latent_dim]
+        # Step 2: Update hidden state (belief update via LSTM)
+        h_curr, c_curr = self.lstm(obs_feat, (h_prev, c_prev))  # [batch, latent_dim]
         
         # Step 3: Project to latent distribution parameters
         mu = self.fc_mu(h_curr)
         logvar = self.fc_logvar(h_curr)
         
-        return mu, logvar, h_curr
+        return mu, logvar, h_curr, c_curr
 
 
 class RecurrentVAEModel(nn.Module):
@@ -218,8 +220,9 @@ class RecurrentVAEModel(nn.Module):
         batch_size, seq_len, embed_dim = embeddings_chosen.shape
         device = embeddings_chosen.device
         
-        # Initialize hidden state
+        # Initialize LSTM hidden and cell states
         h_curr = torch.zeros(batch_size, self.latent_dim).to(device)
+        c_curr = torch.zeros(batch_size, self.latent_dim).to(device)
         
         # Storage for trajectories
         if return_trajectories:
@@ -235,7 +238,7 @@ class RecurrentVAEModel(nn.Module):
             e_rejected = embeddings_rejected[:, t, :]
             
             # Update belief
-            mu, logvar, h_curr = self.encoder(e_chosen, e_rejected, h_curr)
+            mu, logvar, h_curr, c_curr = self.encoder(e_chosen, e_rejected, h_curr, c_curr)
             
             # Sample z
             if self.training:
@@ -384,7 +387,9 @@ class RecurrentVAETrainer(Trainer):
         batch_size, seq_len, embed_dim = embeddings_chosen.shape
         device = embeddings_chosen.device
         
+        # Initialize LSTM hidden and cell states
         h_curr = torch.zeros(batch_size, self.latent_dim).to(device)
+        c_curr = torch.zeros(batch_size, self.latent_dim).to(device)
         prev_mu = torch.zeros(batch_size, self.latent_dim).to(device)
         prev_logvar = torch.zeros(batch_size, self.latent_dim).to(device)
         
@@ -405,8 +410,8 @@ class RecurrentVAETrainer(Trainer):
             e_chosen = embeddings_chosen[:, t, :]
             e_rejected = embeddings_rejected[:, t, :]
             
-            # Encoder
-            curr_mu, curr_logvar, h_curr = model.encoder(e_chosen, e_rejected, h_curr)
+            # Encoder (LSTM returns both h and c)
+            curr_mu, curr_logvar, h_curr, c_curr = model.encoder(e_chosen, e_rejected, h_curr, c_curr)
             curr_mu = torch.clamp(curr_mu, -1, 1)
             curr_logvar = torch.clamp(curr_logvar, -1, 1)
             
@@ -420,8 +425,8 @@ class RecurrentVAETrainer(Trainer):
             r_chosen, r_rejected = model.decoder(e_chosen, e_rejected, z)
             
             # Losses
-            # 1. Temporal Weighting: Care more about later timesteps
-            time_weight = self.temporal_gamma ** t
+            # 1. Capped Temporal Weighting (Fix #5): Prevent weight explosion
+            time_weight = min(1.0 + (0.1 * t), 2.0)  # Max 2x weight
             recon_loss = -F.logsigmoid(r_chosen - r_rejected).mean()
             
             # 2. KL Divergence
@@ -445,8 +450,11 @@ class RecurrentVAETrainer(Trainer):
             total_recon += recon_loss
             total_kl += kl_loss
             
+            # Fix #6: Keep detach on mu/logvar (KL prior), but NO detach on h_curr/c_curr
+            # This allows gradients to flow through the entire episode via LSTM states
             prev_mu = curr_mu.detach()
             prev_logvar = curr_logvar.detach()
+            # h_curr and c_curr flow naturally to next iteration (no detach!)
             
             if return_outputs:
                 all_rewards_chosen.append(r_chosen.detach())

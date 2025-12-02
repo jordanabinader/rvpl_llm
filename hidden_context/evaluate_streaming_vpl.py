@@ -106,8 +106,9 @@ def evaluate_adaptation(
             
             batch_size = embeddings_chosen.shape[0]
             
-            # Initialize hidden state
+            # Initialize LSTM hidden and cell states
             h_curr = torch.zeros(batch_size, model.latent_dim).to(device)
+            c_curr = torch.zeros(batch_size, model.latent_dim).to(device)
             
             # Process sequence timestep by timestep
             for t in range(seq_length):
@@ -115,10 +116,13 @@ def evaluate_adaptation(
                 e_rejected = embeddings_rejected[:, t, :]
                 
                 # Update belief
-                mu, logvar, h_curr = model.encoder(e_chosen, e_rejected, h_curr)
+                mu, logvar, h_curr, c_curr = model.encoder(e_chosen, e_rejected, h_curr, c_curr)
                 
-                # Use mean (no sampling during evaluation)
-                z = mu
+                # Fix #1: Thompson Sampling - sample from posterior instead of using mean
+                # This allows exploration based on uncertainty
+                std = torch.exp(0.5 * logvar)
+                eps = torch.randn_like(std)
+                z = mu + std * eps
                 
                 # Predict rewards
                 r_chosen, r_rejected = model.decoder(e_chosen, e_rejected, z)

@@ -39,13 +39,13 @@ python -m pip install wandb
 echo "Node: $(hostname)"
 echo "GPUs visible to this job:"
 nvidia-smi || echo "nvidia-smi not found"
-
 #########################
 # Training              #
 #########################
 DATA_SUBSET="both"
 SEQ_LENGTH=10
-LATENT_DIM=512
+LATENT_DIM=64      # ← CHANGED from 512 (Fix #4: Inverted Funnel)
+HIDDEN_DIM=256     # ← ADDED (Fix #4: Inverted Funnel)
 SEED=0
 
 # NEW HYPERPARAMETERS
@@ -54,20 +54,19 @@ CYCLES=4
 GAMMA=1.1
 
 # Updated Experiment Name to track new params
-EXP_NAME="${DATA_SUBSET}_seq${SEQ_LENGTH}_latent${LATENT_DIM}_beta${BETA_MAX}_cycles${CYCLES}_gamma${GAMMA}_seed${SEED}"
+EXP_NAME="${DATA_SUBSET}_seq${SEQ_LENGTH}_latent${LATENT_DIM}_hidden${HIDDEN_DIM}_beta${BETA_MAX}_cycles${CYCLES}_gamma${GAMMA}_seed${SEED}"
 OUTPUT_DIR="experiments/streaming_vpl_hh/${EXP_NAME}"
 
 echo "========================================="
-echo "Step 1: Training Streaming VPL (Refactored)"
+echo "Step 1: Training Streaming VPL (With Fixes)"
 echo "========================================="
 
-# Note: arguments updated to match new ScriptArguments
 python -m hidden_context.train_streaming_vpl \
     --data_path data_release/hh_rlhf/gpt2 \
     --data_subset ${DATA_SUBSET} \
     --seq_length ${SEQ_LENGTH} \
     --latent_dim ${LATENT_DIM} \
-    --hidden_dim 512 \
+    --hidden_dim ${HIDDEN_DIM} \
     --beta_max ${BETA_MAX} \
     --beta_cycles ${CYCLES} \
     --temporal_gamma ${GAMMA} \
@@ -83,16 +82,16 @@ python -m hidden_context.train_streaming_vpl \
 
 echo ""
 echo "========================================="
-echo "Step 2: Evaluation"
+echo "Step 2: Evaluation (With Thompson Sampling)"
 echo "=========================================="
 
-# Ensure evaluate_streaming_vpl.py imports the NEW RecurrentVAEModel class
 python -m hidden_context.evaluate_streaming_vpl \
     --model_path ${OUTPUT_DIR}/final_checkpoint/model.pt \
     --data_path data_release/hh_rlhf/gpt2 \
     --data_subset ${DATA_SUBSET} \
     --seq_length ${SEQ_LENGTH} \
     --latent_dim ${LATENT_DIM} \
+    --hidden_dim ${HIDDEN_DIM} \
     --num_eval_episodes 200 \
     --output_dir ${OUTPUT_DIR}/evaluation \
     --seed ${SEED}

@@ -48,11 +48,11 @@ class ScriptArguments:
         metadata={"help": "Dimension of embeddings for decoder (GPT-2 default)"}
     )
     latent_dim: int = field(
-        default=512,
+        default=64,  # Changed from 512 (Fix #4: Inverted Funnel)
         metadata={"help": "Dimension of latent user preference vector"}
     )
     hidden_dim: int = field(
-        default=512,
+        default=256,  # Changed from 512 (Fix #4: Inverted Funnel)
         metadata={"help": "Dimension of hidden layers in encoder/decoder"}
     )
     

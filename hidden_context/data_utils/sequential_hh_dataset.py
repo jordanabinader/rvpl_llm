@@ -33,7 +33,9 @@ class SequentialHHDataset(Dataset):
         seq_length: int = 10,
         epoch_size: int = 1000,
         seed: int = 0,
-        min_pool_size: Optional[int] = None
+        min_pool_size: Optional[int] = None,
+        use_hard_negatives: bool = True,
+        hard_negative_ratio: float = 0.6
     ):
         """
         Args:
@@ -44,6 +46,8 @@ class SequentialHHDataset(Dataset):
             epoch_size: Arbitrary epoch length (number of episodes per epoch)
             seed: Random seed for reproducibility
             min_pool_size: Minimum samples required per user type (defaults to seq_length)
+            use_hard_negatives: If True, preferentially sample hard examples (Fix #3)
+            hard_negative_ratio: Proportion of hard negatives to sample (0.6 = 60% hard, 40% mixed)
         """
         self.data_path = data_path
         self.data_subset = data_subset
@@ -52,6 +56,8 @@ class SequentialHHDataset(Dataset):
         self.epoch_size = epoch_size
         self.seed = seed
         self.min_pool_size = min_pool_size or seq_length
+        self.use_hard_negatives = use_hard_negatives
+        self.hard_negative_ratio = hard_negative_ratio
         
         # Set random seed
         random.seed(seed)
@@ -117,6 +123,9 @@ class SequentialHHDataset(Dataset):
             
             user_type = self._identify_user_type(item)
             if user_type is not None:
+                # Fix #3: Compute and store difficulty score
+                if self.use_hard_negatives:
+                    item['difficulty'] = self._compute_difficulty(item)
                 self.pools[user_type].append(item)
         
         # Debug: print sample from each pool if available
@@ -145,6 +154,45 @@ class SequentialHHDataset(Dataset):
         else:
             return None
     
+    def _compute_difficulty(self, item: Dict) -> float:
+        """
+        Compute difficulty score for a sample (Fix #3).
+        
+        "Hard" pairs are those where the distinction is not obvious:
+        - Similar lengths between chosen and rejected
+        - No extreme differences in superficial features
+        
+        Returns:
+            difficulty: Higher score = harder example (0.0 to 1.0)
+        """
+        chosen = item.get('chosen', '')
+        rejected = item.get('rejected', '')
+        
+        # Length similarity (harder when similar lengths)
+        len_chosen = len(chosen)
+        len_rejected = len(rejected)
+        max_len = max(len_chosen, len_rejected, 1)
+        min_len = min(len_chosen, len_rejected, 1)
+        length_ratio = min_len / max_len  # Close to 1.0 = similar lengths = harder
+        
+        # Embedding similarity (if available)
+        embedding_sim = 0.5  # Default moderate difficulty
+        if 'embeddings' in item:
+            embed_c = np.array(item['embeddings']['embedding_chosen'])
+            embed_r = np.array(item['embeddings']['embedding_rejected'])
+            # Cosine similarity
+            dot_product = np.dot(embed_c, embed_r)
+            norm_c = np.linalg.norm(embed_c)
+            norm_r = np.linalg.norm(embed_r)
+            if norm_c > 0 and norm_r > 0:
+                embedding_sim = dot_product / (norm_c * norm_r)
+                embedding_sim = (embedding_sim + 1) / 2  # Scale to [0, 1]
+        
+        # Combined difficulty: higher when lengths similar and embeddings similar
+        difficulty = 0.5 * length_ratio + 0.5 * embedding_sim
+        
+        return difficulty
+    
     def __len__(self) -> int:
         """Return arbitrary epoch size."""
         return self.epoch_size
@@ -163,9 +211,30 @@ class SequentialHHDataset(Dataset):
         # Randomly select user type from available types
         user_type = random.choice(self.available_user_types)
         
-        # Sample T unique items from this user's pool without replacement
+        # Sample T unique items from this user's pool
         pool = self.pools[user_type]
-        episode_items = random.sample(pool, self.seq_length)
+        
+        # Fix #3: Weighted sampling based on difficulty (60% hard, 40% mixed)
+        if self.use_hard_negatives and 'difficulty' in pool[0]:
+            # Extract difficulty scores
+            difficulties = np.array([item['difficulty'] for item in pool])
+            
+            # Normalize to probabilities (higher difficulty = higher prob)
+            # Add small epsilon to avoid zero probabilities
+            weights = difficulties + 0.01
+            weights = weights / weights.sum()
+            
+            # Sample with replacement using weights, then deduplicate if needed
+            indices = np.random.choice(
+                len(pool),
+                size=min(self.seq_length * 2, len(pool)),  # Oversample to ensure uniqueness
+                replace=False,
+                p=weights
+            )
+            episode_items = [pool[i] for i in indices[:self.seq_length]]
+        else:
+            # Standard random sampling
+            episode_items = random.sample(pool, self.seq_length)
         
         # Extract embeddings and stack
         embeddings_chosen = []
