@@ -232,8 +232,9 @@ if __name__ == "__main__":
             script_args.log_dir,
             f"{script_args.data_subset}_seq{script_args.seq_length}_"
             f"latent{script_args.latent_dim}_"
-            f"hidden{script_args.hidden_dim}_"  # <--- Added this to match Slurm expectation
+            f"hidden{script_args.hidden_dim}_"
             f"beta{script_args.beta_max}_"
+            f"freebits{script_args.free_bits}_"
             f"cycles{script_args.beta_cycles}_gamma{script_args.temporal_gamma}_"
             f"seed{script_args.seed}"
         )

@@ -100,7 +100,6 @@ for BETA_MAX in 0.001 0.005; do
     echo "========================================="
     
     python -m hidden_context.train_streaming_vpl \
-        --output_dir ${OUTPUT_DIR} \
         --data_path data_release/hh_rlhf/gpt2 \
         --data_subset ${DATA_SUBSET} \
         --seq_length ${SEQ_LENGTH} \
