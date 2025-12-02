@@ -8,7 +8,7 @@
 #SBATCH -p mit_normal_gpu                   # GPU partition
 #SBATCH -c 4                                # CPU cores
 #SBATCH --mem=32G                           # Memory
-#SBATCH -t 8:00:00                         # Time limit (longer for 2 experiments)
+#SBATCH -t 6:00:00                         # Time limit (longer for 2 experiments)
 #SBATCH -G 1                                # 1 GPU
 #SBATCH -o logs/beta_experiments_%j.out # STDOUT log
 #SBATCH -e logs/beta_experiments_%j.err # STDERR log
@@ -100,6 +100,7 @@ for BETA_MAX in 0.001 0.005; do
     echo "========================================="
     
     python -m hidden_context.train_streaming_vpl \
+        --output_dir ${OUTPUT_DIR} \
         --data_path data_release/hh_rlhf/gpt2 \
         --data_subset ${DATA_SUBSET} \
         --seq_length ${SEQ_LENGTH} \
