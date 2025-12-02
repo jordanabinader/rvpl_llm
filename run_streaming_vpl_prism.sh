@@ -50,8 +50,8 @@ python -m hidden_context.train_streaming_vpl \
     --seq_length $SEQ_LENGTH \
     --latent_dim $LATENT_DIM \
     --hidden_dim 512 \
-    --encoder_embed_dim 1024 \
-    --decoder_embed_dim 1024 \
+    --encoder_embed_dim 768 \
+    --decoder_embed_dim 768 \
     --beta_max $BETA \
     --beta_cycles 4 \
     --temporal_gamma 1.1 \
