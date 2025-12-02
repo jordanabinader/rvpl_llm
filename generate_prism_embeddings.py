@@ -27,94 +27,76 @@ def parse_conversation_to_preferences(conversation_data: Dict) -> List[Dict]:
     In PRISM, each turn has multiple model responses that are rated.
     We extract pairs where one response is clearly preferred over another.
     
+    Based on actual PRISM structure:
+    - conversation_history has entries with: 'turn', 'role', 'content', 'score', 'within_turn_id'
+    - Multiple model responses can exist at the same turn (different within_turn_id)
+    - User prompts alternate with model responses
+    
     Args:
         conversation_data: Single conversation from PRISM dataset
         
     Returns:
         List of preference pairs with metadata
     """
-    preferences = []
+    pairs = []
     
     conversation_id = conversation_data.get('conversation_id', '')
     user_id = conversation_data.get('user_id', '')
     conversation_type = conversation_data.get('conversation_type', '')
     conversation_history = conversation_data.get('conversation_history', [])
     
-    # Process each turn in the conversation
-    turn_number = 0
-    current_prompt = None
-    
-    for item in conversation_history:
-        role = item.get('role', '')
+    # Group entries by turn number
+    turns = {}
+    for entry in conversation_history:
+        turn = entry.get('turn', 0)
+        if turn not in turns:
+            turns[turn] = {'user': None, 'models': []}
         
+        role = entry.get('role', '')
         if role == 'user':
-            current_prompt = item.get('content', '')
-        elif role == 'model' and current_prompt is not None:
-            # This is a model response with rating
-            model_name = item.get('model_name', 'unknown')
-            content = item.get('content', '')
-            score = item.get('score', None)
+            turns[turn]['user'] = entry.get('content', '')
+        elif role == 'model':
+            score = entry.get('score')
+            if score is not None and entry.get('content'):  # Only include rated responses with content
+                turns[turn]['models'].append({
+                    'content': entry.get('content', ''),
+                    'score': score,
+                    'model_name': entry.get('model_name', 'unknown'),
+                    'model_provider': entry.get('model_provider', 'unknown')
+                })
+    
+    # Create preference pairs from each turn
+    for turn_num, turn_data in turns.items():
+        prompt = turn_data['user']
+        models = turn_data['models']
+        
+        if prompt is None or len(models) < 2:
+            continue  # Need prompt and at least 2 model responses to create a pair
+        
+        # Sort by score (descending)
+        models_sorted = sorted(models, key=lambda x: x['score'], reverse=True)
+        
+        # Create pairs: best vs each worse option
+        best = models_sorted[0]
+        for worse in models_sorted[1:]:
+            rating_diff = best['score'] - worse['score']
             
-            # Store for potential pairing
-            # In PRISM, at turn 0, there are 4 different models responding
-            # After turn 0, the same model responds with A/B variants
-            # We need to look for multiple responses at the same turn
-            
-            # For now, we'll collect responses and pair them within turns
-            # This is a simplified version - you might want to enhance this
-            if score is not None:
-                preferences.append({
+            # Only include pairs with sufficient rating difference
+            if rating_diff >= 10.0:  # Will be configurable via min_rating_diff
+                pairs.append({
                     'conversation_id': conversation_id,
                     'user_id': user_id,
                     'conversation_type': conversation_type,
-                    'turn_number': turn_number,
-                    'prompt': current_prompt,
-                    'response': content,
-                    'model_name': model_name,
-                    'score': score
+                    'turn_number': turn_num,
+                    'prompt': prompt,
+                    'chosen': best['content'],
+                    'rejected': worse['content'],
+                    'rating_chosen': best['score'],
+                    'rating_rejected': worse['score'],
+                    'rating_difference': rating_diff,
+                    'model_chosen': best['model_name'],
+                    'model_rejected': worse['model_name']
                 })
-            
-            turn_number += 1
-    
-    # Now create preference pairs from responses
-    # Group by turn and prompt, then pair responses
-    pairs = []
-    turn_groups = {}
-    
-    for pref in preferences:
-        key = (pref['turn_number'], pref['prompt'])
-        if key not in turn_groups:
-            turn_groups[key] = []
-        turn_groups[key].append(pref)
-    
-    # Create pairs within each turn
-    for (turn_num, prompt), responses in turn_groups.items():
-        # Sort by score to get clear preferences
-        responses_sorted = sorted(responses, key=lambda x: x['score'], reverse=True)
-        
-        # Create pairs: highest rated vs others
-        if len(responses_sorted) >= 2:
-            chosen = responses_sorted[0]
-            # Pair with lower-rated responses
-            for rejected in responses_sorted[1:]:
-                rating_diff = chosen['score'] - rejected['score']
-                
-                # Only include if there's a clear preference (>= 10 point difference)
-                if rating_diff >= 10:
-                    pairs.append({
-                        'conversation_id': conversation_id,
-                        'user_id': user_id,
-                        'conversation_type': conversation_type,
-                        'turn_number': turn_num,
-                        'prompt': prompt,
-                        'chosen': chosen['response'],
-                        'rejected': rejected['response'],
-                        'rating_chosen': chosen['score'],
-                        'rating_rejected': rejected['score'],
-                        'rating_difference': rating_diff,
-                        'model_chosen': chosen['model_name'],
-                        'model_rejected': rejected['model_name']
-                    })
     
     return pairs
 

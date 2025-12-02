@@ -47,22 +47,22 @@ mkdir -p $OUTPUT_DIR
 # Run training
 python -m hidden_context.train_streaming_vpl \
     --data_path $DATA_PATH \
-    --dataset_type prism \
     --seq_length $SEQ_LENGTH \
     --latent_dim $LATENT_DIM \
     --hidden_dim 512 \
-    --embed_dim 1024 \
-    --num_layers 2 \
-    --beta $BETA \
+    --encoder_embed_dim 1024 \
+    --decoder_embed_dim 1024 \
+    --beta_max $BETA \
+    --beta_cycles 4 \
+    --temporal_gamma 1.1 \
     --learning_rate 1e-4 \
-    --batch_size 32 \
-    --num_epochs 10 \
-    --eval_every 500 \
-    --save_every 500 \
-    --output_dir $OUTPUT_DIR \
-    --seed $SEED \
-    --wandb_project "streaming-vpl-prism" \
-    --wandb_name $EXP_NAME
+    --per_device_train_batch_size 8 \
+    --per_device_eval_batch_size 8 \
+    --num_train_epochs 10 \
+    --eval_steps 500 \
+    --save_steps 500 \
+    --log_dir $OUTPUT_DIR \
+    --seed $SEED
 
 echo ""
 echo "========================================="
