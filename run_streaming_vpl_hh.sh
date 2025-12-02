@@ -12,7 +12,6 @@
 #SBATCH -G 1                                # 1 GPU
 #SBATCH -o logs/streaming_vpl_hh_%j.out # STDOUT log
 #SBATCH -e logs/streaming_vpl_hh_%j.err # STDERR log
-
 #########################
 # Environment setup     #
 #########################
@@ -20,28 +19,56 @@
 # Create logs directory
 mkdir -p logs
 export WANDB_MODE=disabled
+
+# 1. Load the base system python
 module load miniforge
 
-# Activate your Python environment
-source vnev/bin/activate
+# 2. Create the virtual environment (if it doesn't exist)
+# We use 'venv' (standard spelling), not 'vnev'
+if [ ! -d "venv" ]; then
+    echo "Creating virtual environment..."
+    python -m venv venv
+fi
 
-# Install compatible versions
-# Remove the old tokenizers downgrade - it causes conflicts!
+# 3. Activate the environment (Fixing the typo here: vnev -> venv)
+source venv/bin/activate
+
+# 4. CRITICAL: Ensure we rely ONLY on this venv, ignoring local user packages
+export PYTHONNOUSERSITE=1
+
+# 5. Upgrade pip inside the virtual environment
 python -m pip install --upgrade pip
 
-# Core HF stack with compatible versions
-python -m pip install "torch>=2.0" "transformers>=4.40,<4.50" "tokenizers>=0.19,<0.22" "peft>=0.10.0" "accelerate>=0.20"
+# 6. Install packages
+# NOTE: We REMOVED 'pip uninstall'. You cannot uninstall system packages.
+# Instead, we use --ignore-installed to force installing a fresh copy 
+# into your local venv, shadowing the system version.
 
-# Extra utilities
-python -m pip install numpy sentencepiece datasets
-
-# Logging
-python -m pip install wandb
+echo "Installing dependencies..."
+python -m pip install --upgrade --ignore-installed --no-cache-dir \
+    "torch>=2.0" \
+    "transformers==4.40.0" \
+    "tokenizers==0.19.1" \
+    "peft==0.10.0" \
+    "accelerate>=0.27.0" \
+    "numpy" \
+    "sentencepiece" \
+    "datasets" \
+    "wandb" \
+    "matplotlib" \
+    "scipy" \
+    "scikit-learn" 
 
 echo "Node: $(hostname)"
 echo "GPUs visible to this job:"
 nvidia-smi || echo "nvidia-smi not found"
 
+# Verify versions
+echo "Package versions in venv:"
+python -c "import transformers; print(f'transformers: {transformers.__version__}')"
+python -c "import peft; print(f'peft: {peft.__version__}')"
+python -c "import tokenizers; print(f'tokenizers: {tokenizers.__version__}')"
+python -c "import accelerate; print(f'accelerate: {accelerate.__version__}')"
 #########################
 # Training              #
 #########################

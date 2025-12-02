@@ -225,12 +225,14 @@ if __name__ == "__main__":
     
     # Define training arguments
     output_dir = os.path.join(
-        script_args.log_dir,
-        f"{script_args.data_subset}_seq{script_args.seq_length}_"
-        f"latent{script_args.latent_dim}_beta{script_args.beta_max}_"
-        f"cycles{script_args.beta_cycles}_gamma{script_args.temporal_gamma}_"
-        f"seed{script_args.seed}"
-    )
+            script_args.log_dir,
+            f"{script_args.data_subset}_seq{script_args.seq_length}_"
+            f"latent{script_args.latent_dim}_"
+            f"hidden{script_args.hidden_dim}_"  # <--- Added this to match Slurm expectation
+            f"beta{script_args.beta_max}_"
+            f"cycles{script_args.beta_cycles}_gamma{script_args.temporal_gamma}_"
+            f"seed{script_args.seed}"
+        )
     
     training_args = TrainingArguments(
         output_dir=output_dir,
@@ -239,7 +241,7 @@ if __name__ == "__main__":
         per_device_eval_batch_size=script_args.per_device_eval_batch_size,
         num_train_epochs=script_args.num_train_epochs,
         weight_decay=script_args.weight_decay,
-        eval_strategy="steps",
+        evaluation_strategy="steps",
         eval_steps=script_args.eval_steps,
         save_strategy="steps",
         save_steps=script_args.save_steps,
