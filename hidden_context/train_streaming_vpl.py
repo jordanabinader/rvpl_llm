@@ -21,6 +21,7 @@ from transformers import (
 # Import our custom modules
 from .data_utils.sequential_pets_dataset import SequentialPetsDataset, sequential_collate_fn
 from .data_utils.sequential_hh_dataset import SequentialHHDataset, sequential_hh_collate_fn
+from .data_utils.sequential_prism_dataset import SequentialPRISMDataset, sequential_prism_collate_fn
 from .recurrent_vae_utils import RecurrentVAEModel, RecurrentVAETrainer
 
 
@@ -168,7 +169,31 @@ if __name__ == "__main__":
     print("\nLoading datasets...")
     
     # Detect dataset type based on path
-    if "hh" in script_args.data_path.lower():
+    if "prism" in script_args.data_path.lower():
+        print("Using PRISM dataset (real user conversations with ratings)")
+        train_dataset = SequentialPRISMDataset(
+            data_path=script_args.data_path,
+            split="train",
+            seq_length=script_args.seq_length,
+            epoch_size=script_args.epoch_size,
+            seed=script_args.seed,
+            min_interactions_per_user=script_args.seq_length,
+            use_hard_negatives=True,
+            use_turn_order=True
+        )
+        
+        eval_dataset = SequentialPRISMDataset(
+            data_path=script_args.data_path,
+            split="test",
+            seq_length=script_args.seq_length,
+            epoch_size=script_args.epoch_size // 5,  # Smaller eval set
+            seed=script_args.seed + 1,
+            min_interactions_per_user=script_args.seq_length,
+            use_hard_negatives=True,
+            use_turn_order=True
+        )
+        collate_fn = sequential_prism_collate_fn
+    elif "hh" in script_args.data_path.lower():
         print("Using HH-RLHF dataset (helpful/harmless preferences)")
         train_dataset = SequentialHHDataset(
             data_path=script_args.data_path,
