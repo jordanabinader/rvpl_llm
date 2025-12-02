@@ -88,7 +88,43 @@ class Decoder(nn.Module):
         rr = self._model(xr)
         return rc, rr
 
-
+class HyperDecoder(nn.Module):
+    """
+    HyperNetwork Decoder to force latent dependency.
+    
+    Instead of concatenating z with embeddings (which allows the decoder to ignore z),
+    this decoder uses z to generate a 'preference vector' w.
+    The reward is the dot product of w and the embedding.
+    
+    Reward = (W(z) . e)
+    """
+    def __init__(self, embed_dim: int, latent_dim: int):
+        super(HyperDecoder, self).__init__()
+        
+        # Maps latent z to a preference direction w in embedding space
+        self.z_to_w = nn.Sequential(
+            nn.Linear(latent_dim, latent_dim),
+            nn.LeakyReLU(0.2),
+            nn.Linear(latent_dim, embed_dim) # Output matches embedding dim
+        )
+        
+    def forward(self, e_c, e_r, z):
+        """
+        Args:
+            e_c: Chosen embeddings [batch, embed_dim]
+            e_r: Rejected embeddings [batch, embed_dim]
+            z: Latent sample [batch, latent_dim]
+        """
+        # 1. Generate preference vector from z
+        w = self.z_to_w(z) # [batch, embed_dim]
+        
+        # 2. Compute rewards via dot product
+        # (batch, dim) * (batch, dim) -> (batch, 1)
+        r_chosen = torch.sum(e_c * w, dim=-1, keepdim=True)
+        r_rejected = torch.sum(e_r * w, dim=-1, keepdim=True)
+        
+        return r_chosen, r_rejected
+        
 class VAEModel(nn.Module):
     def __init__(self, encoder_embed_dim, decoder_embed_dim, hidden_dim, latent_dim, llm_encoder, llm_contexts_encoder,
                  fixed_contexts=False, fixed_llm_embeddings=False, use_causal_lm=False, use_attention_layer=False,

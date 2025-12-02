@@ -150,3 +150,8 @@ results/
 wandb/
 slurm*/
 data/
+vnev/
+data_release/
+data.zip
+.DS_Store
+experiments/
