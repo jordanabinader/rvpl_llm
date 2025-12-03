@@ -22,7 +22,10 @@ from transformers import (
 from .data_utils.sequential_pets_dataset import SequentialPetsDataset, sequential_collate_fn
 from .data_utils.sequential_hh_dataset import SequentialHHDataset, sequential_hh_collate_fn
 from .data_utils.sequential_prism_dataset import SequentialPRISMDataset, sequential_prism_collate_fn
-from .recurrent_vae_utils import RecurrentVAEModel, RecurrentVAETrainer
+from .recurrent_vae_utils import (
+    RecurrentVAEModel, RecurrentVAETrainer,
+    TransformerVAEModel, TransformerVAETrainer
+)
 
 
 @dataclass
@@ -55,6 +58,24 @@ class ScriptArguments:
     hidden_dim: int = field(
         default=256,  # Changed from 512 (Fix #4: Inverted Funnel)
         metadata={"help": "Dimension of hidden layers in encoder/decoder"}
+    )
+    
+    # Architecture choice
+    use_transformer: bool = field(
+        default=False,
+        metadata={"help": "Use Transformer encoder instead of LSTM (self-attention over sequence)"}
+    )
+    num_attention_heads: int = field(
+        default=4,
+        metadata={"help": "Number of attention heads for Transformer encoder"}
+    )
+    num_transformer_layers: int = field(
+        default=2,
+        metadata={"help": "Number of Transformer encoder layers"}
+    )
+    transformer_dropout: float = field(
+        default=0.1,
+        metadata={"help": "Dropout rate for Transformer"}
     )
     
     # Sequential processing arguments
@@ -239,12 +260,25 @@ if __name__ == "__main__":
     
     # Create model
     print("\nInitializing model...")
-    model = RecurrentVAEModel(
-        encoder_embed_dim=script_args.encoder_embed_dim,
-        decoder_embed_dim=script_args.decoder_embed_dim,
-        hidden_dim=script_args.hidden_dim,
-        latent_dim=script_args.latent_dim
-    )
+    if script_args.use_transformer:
+        print("Using Transformer architecture (self-attention)")
+        model = TransformerVAEModel(
+            encoder_embed_dim=script_args.encoder_embed_dim,
+            decoder_embed_dim=script_args.decoder_embed_dim,
+            hidden_dim=script_args.hidden_dim,
+            latent_dim=script_args.latent_dim,
+            num_heads=script_args.num_attention_heads,
+            num_layers=script_args.num_transformer_layers,
+            dropout=script_args.transformer_dropout
+        )
+    else:
+        print("Using Recurrent architecture (LSTM)")
+        model = RecurrentVAEModel(
+            encoder_embed_dim=script_args.encoder_embed_dim,
+            decoder_embed_dim=script_args.decoder_embed_dim,
+            hidden_dim=script_args.hidden_dim,
+            latent_dim=script_args.latent_dim
+        )
     
     # Count parameters
     total_params = sum(p.numel() for p in model.parameters())
@@ -296,13 +330,16 @@ if __name__ == "__main__":
     
     # Create trainer
     # --- UPDATED INITIALIZATION ---
-    trainer = RecurrentVAETrainer(
+    # Choose trainer class based on architecture
+    TrainerClass = TransformerVAETrainer if script_args.use_transformer else RecurrentVAETrainer
+    
+    trainer = TrainerClass(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         data_collator=collate_fn,
-        compute_metrics=RecurrentVAETrainer.compute_metrics,
+        compute_metrics=TrainerClass.compute_metrics,
         seq_length=script_args.seq_length,
         latent_dim=script_args.latent_dim,
         # New arguments:

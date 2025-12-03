@@ -20,7 +20,7 @@ import wandb
 from .data_utils.sequential_pets_dataset import SequentialPetsDataset, sequential_collate_fn
 from .data_utils.sequential_hh_dataset import SequentialHHDataset, sequential_hh_collate_fn
 from .data_utils.sequential_prism_dataset import SequentialPRISMDataset, sequential_prism_collate_fn
-from .recurrent_vae_utils import RecurrentVAEModel
+from .recurrent_vae_utils import RecurrentVAEModel, TransformerVAEModel
 
 
 @dataclass
@@ -47,6 +47,12 @@ class EvalArguments:
     decoder_embed_dim: int = field(default=768)
     latent_dim: int = field(default=512)
     hidden_dim: int = field(default=512)
+    use_transformer: bool = field(
+        default=False,
+        metadata={"help": "Use Transformer architecture (must match training)"}
+    )
+    num_attention_heads: int = field(default=4)
+    num_transformer_layers: int = field(default=2)
     
     # Evaluation arguments
     seq_length: int = field(
@@ -112,34 +118,67 @@ def evaluate_adaptation(
             
             batch_size = embeddings_chosen.shape[0]
             
-            # Initialize LSTM hidden and cell states
-            h_curr = torch.zeros(batch_size, model.latent_dim).to(device)
-            c_curr = torch.zeros(batch_size, model.latent_dim).to(device)
+            # Check if using Transformer or Recurrent architecture
+            is_transformer = isinstance(model, TransformerVAEModel)
             
-            # Process sequence timestep by timestep
-            for t in range(seq_length):
-                e_chosen = embeddings_chosen[:, t, :]
-                e_rejected = embeddings_rejected[:, t, :]
+            if is_transformer:
+                # Transformer: encode all pairs first, then attend for each timestep
+                all_pairs = []
+                for t in range(seq_length):
+                    e_chosen = embeddings_chosen[:, t, :]
+                    e_rejected = embeddings_rejected[:, t, :]
+                    pair = torch.cat([e_chosen, e_rejected], dim=-1)
+                    pair_encoded = model.encoder.pair_encoder(pair)
+                    all_pairs.append(pair_encoded)
+                sequence_pairs = torch.stack(all_pairs, dim=1)
                 
-                # Update belief
-                mu, logvar, h_curr, c_curr = model.encoder(e_chosen, e_rejected, h_curr, c_curr)
+                # Process each timestep with attention
+                for t in range(seq_length):
+                    e_chosen = embeddings_chosen[:, t, :]
+                    e_rejected = embeddings_rejected[:, t, :]
+                    
+                    # Attend to all observations up to current timestep
+                    mu, logvar = model.encoder(sequence_pairs[:, :t+1, :], current_timestep=t)
+                    
+                    # Sample z (Thompson sampling)
+                    std = torch.exp(0.5 * logvar)
+                    eps = torch.randn_like(std)
+                    z = mu + std * eps
+                    
+                    # Predict rewards
+                    r_chosen, r_rejected = model.decoder(e_chosen, e_rejected, z)
+                    
+                    # Compute accuracy
+                    correct = (r_chosen > r_rejected).float()
+                    accuracies_per_timestep[t].append(correct.cpu())
+                    all_rewards_chosen[t].append(r_chosen.cpu())
+                    all_rewards_rejected[t].append(r_rejected.cpu())
+            else:
+                # Recurrent: maintain LSTM hidden and cell states
+                h_curr = torch.zeros(batch_size, model.latent_dim).to(device)
+                c_curr = torch.zeros(batch_size, model.latent_dim).to(device)
                 
-                # Fix #1: Thompson Sampling - sample from posterior instead of using mean
-                # This allows exploration based on uncertainty
-                std = torch.exp(0.5 * logvar)
-                eps = torch.randn_like(std)
-                z = mu + std * eps
-                
-                # Predict rewards
-                r_chosen, r_rejected = model.decoder(e_chosen, e_rejected, z)
-                
-                # Compute accuracy
-                correct = (r_chosen > r_rejected).float()
-                accuracies_per_timestep[t].append(correct.cpu())
-                
-                # Store rewards for analysis
-                all_rewards_chosen[t].append(r_chosen.cpu())
-                all_rewards_rejected[t].append(r_rejected.cpu())
+                # Process sequence timestep by timestep
+                for t in range(seq_length):
+                    e_chosen = embeddings_chosen[:, t, :]
+                    e_rejected = embeddings_rejected[:, t, :]
+                    
+                    # Update belief
+                    mu, logvar, h_curr, c_curr = model.encoder(e_chosen, e_rejected, h_curr, c_curr)
+                    
+                    # Thompson Sampling
+                    std = torch.exp(0.5 * logvar)
+                    eps = torch.randn_like(std)
+                    z = mu + std * eps
+                    
+                    # Predict rewards
+                    r_chosen, r_rejected = model.decoder(e_chosen, e_rejected, z)
+                    
+                    # Compute accuracy
+                    correct = (r_chosen > r_rejected).float()
+                    accuracies_per_timestep[t].append(correct.cpu())
+                    all_rewards_chosen[t].append(r_chosen.cpu())
+                    all_rewards_rejected[t].append(r_rejected.cpu())
     
     # Aggregate results
     mean_accuracies = []
@@ -318,12 +357,24 @@ def main():
     
     # Initialize model
     print("\nInitializing model...")
-    model = RecurrentVAEModel(
-        encoder_embed_dim=args.encoder_embed_dim,
-        decoder_embed_dim=args.decoder_embed_dim,
-        hidden_dim=args.hidden_dim,
-        latent_dim=args.latent_dim
-    )
+    if args.use_transformer:
+        print("Using Transformer architecture")
+        model = TransformerVAEModel(
+            encoder_embed_dim=args.encoder_embed_dim,
+            decoder_embed_dim=args.decoder_embed_dim,
+            hidden_dim=args.hidden_dim,
+            latent_dim=args.latent_dim,
+            num_heads=args.num_attention_heads,
+            num_layers=args.num_transformer_layers
+        )
+    else:
+        print("Using Recurrent (LSTM) architecture")
+        model = RecurrentVAEModel(
+            encoder_embed_dim=args.encoder_embed_dim,
+            decoder_embed_dim=args.decoder_embed_dim,
+            hidden_dim=args.hidden_dim,
+            latent_dim=args.latent_dim
+        )
     
     # Load trained weights
     print(f"Loading model from: {args.model_path}")

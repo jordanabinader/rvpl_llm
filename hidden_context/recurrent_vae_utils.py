@@ -344,6 +344,249 @@ class KLAnnealer:
         self.current_step += 1
 
 
+class TransformerVPLEncoder(nn.Module):
+    """
+    Transformer-based encoder for Streaming VPL.
+    
+    Instead of recurrent updates, uses self-attention to aggregate all past interactions.
+    Each timestep can attend to all previous observations.
+    
+    Architecture:
+    1. PairEncoder: Compares (chosen, rejected) → comparison feature
+    2. Positional Encoding: Adds position information
+    3. Transformer: Self-attention over observation sequence
+    4. Projection: Maps attended representation → (mu, logvar) for VAE
+    """
+    
+    def __init__(self, embed_dim: int, latent_dim: int, hidden_dim: int, 
+                 num_heads: int = 4, num_layers: int = 2, dropout: float = 0.1):
+        """
+        Args:
+            embed_dim: Dimension of input embeddings
+            latent_dim: Dimension of latent space (z)
+            hidden_dim: Dimension of hidden layer and transformer
+            num_heads: Number of attention heads
+            num_layers: Number of transformer layers
+            dropout: Dropout rate
+        """
+        super(TransformerVPLEncoder, self).__init__()
+        
+        self.embed_dim = embed_dim
+        self.latent_dim = latent_dim
+        self.hidden_dim = hidden_dim
+        
+        # Pair encoder: combines chosen and rejected embeddings
+        self.pair_encoder = nn.Sequential(
+            nn.Linear(embed_dim * 2, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, hidden_dim)
+        )
+        
+        # Learnable positional encoding
+        self.max_seq_len = 100  # Support sequences up to 100
+        self.pos_encoding = nn.Parameter(torch.randn(self.max_seq_len, hidden_dim) * 0.02)
+        
+        # Transformer encoder layers with causal masking
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=hidden_dim,
+            nhead=num_heads,
+            dim_feedforward=hidden_dim * 4,
+            dropout=dropout,
+            activation='relu',
+            batch_first=True,
+            norm_first=True  # Pre-norm for better training stability
+        )
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers)
+        
+        # Project to latent distribution
+        self.to_mu = nn.Linear(hidden_dim, latent_dim)
+        self.to_logvar = nn.Linear(hidden_dim, latent_dim)
+        
+        # Initialize weights
+        self._init_weights()
+    
+    def _init_weights(self):
+        """Initialize weights for better training."""
+        # Small initialization for mu/logvar to start near N(0,1)
+        nn.init.xavier_uniform_(self.to_mu.weight, gain=0.01)
+        nn.init.zeros_(self.to_mu.bias)
+        nn.init.xavier_uniform_(self.to_logvar.weight, gain=0.01)
+        nn.init.zeros_(self.to_logvar.bias)
+    
+    def forward(self, sequence_pairs, current_timestep):
+        """
+        Encode a sequence of observation pairs up to current_timestep.
+        
+        Args:
+            sequence_pairs: [batch, seq_len, hidden_dim] - encoded observation pairs
+            current_timestep: int - current position in sequence (0-indexed)
+        
+        Returns:
+            mu: [batch, latent_dim]
+            logvar: [batch, latent_dim]
+        """
+        batch_size, seq_len, _ = sequence_pairs.shape
+        
+        # Add positional encoding
+        positions = self.pos_encoding[:seq_len].unsqueeze(0)  # [1, seq_len, hidden_dim]
+        x = sequence_pairs + positions  # [batch, seq_len, hidden_dim]
+        
+        # Create causal attention mask (each position can only attend to itself and previous)
+        # mask[i,j] = True means position i CANNOT attend to position j
+        mask = torch.triu(torch.ones(seq_len, seq_len, device=x.device), diagonal=1).bool()
+        
+        # Apply transformer with causal mask
+        transformed = self.transformer(x, mask=mask)  # [batch, seq_len, hidden_dim]
+        
+        # Get representation at current timestep
+        current_repr = transformed[:, current_timestep, :]  # [batch, hidden_dim]
+        
+        # Project to latent distribution
+        mu = self.to_mu(current_repr)
+        logvar = self.to_logvar(current_repr)
+        
+        return mu, logvar
+
+
+class TransformerVAEModel(nn.Module):
+    """
+    VAE model using Transformer encoder for sequential belief updates.
+    
+    This is the Transformer alternative to RecurrentVAEModel.
+    Reuses the same HyperDecoder but replaces LSTM with self-attention.
+    """
+    
+    def __init__(
+        self,
+        encoder_embed_dim: int,
+        decoder_embed_dim: int,
+        hidden_dim: int,
+        latent_dim: int,
+        num_heads: int = 4,
+        num_layers: int = 2,
+        dropout: float = 0.1
+    ):
+        """
+        Args:
+            encoder_embed_dim: Dimension of embeddings for encoder
+            decoder_embed_dim: Dimension of embeddings for decoder
+            hidden_dim: Dimension of hidden layers and transformer
+            latent_dim: Dimension of latent space
+            num_heads: Number of attention heads
+            num_layers: Number of transformer layers
+            dropout: Dropout rate
+        """
+        super(TransformerVAEModel, self).__init__()
+        
+        self.encoder_embed_dim = encoder_embed_dim
+        self.decoder_embed_dim = decoder_embed_dim
+        self.hidden_dim = hidden_dim
+        self.latent_dim = latent_dim
+        
+        # Transformer encoder
+        self.encoder = TransformerVPLEncoder(
+            encoder_embed_dim, latent_dim, hidden_dim,
+            num_heads, num_layers, dropout
+        )
+        
+        # Reuse HyperDecoder from recurrent version
+        self.decoder = HyperDecoder(decoder_embed_dim, latent_dim)
+    
+    def reparameterization(self, mean, logvar):
+        """Reparameterization trick (same as RecurrentVAEModel)."""
+        std = torch.exp(0.5 * logvar)
+        epsilon = torch.randn_like(std)
+        z = mean + std * epsilon
+        z = F.normalize(z, p=2, dim=-1) * math.sqrt(z.shape[-1])
+        return z
+    
+    def forward(
+        self,
+        embeddings_chosen,
+        embeddings_rejected,
+        return_trajectories=False,
+        **kwargs
+    ):
+        """
+        Forward pass through the entire sequence using self-attention.
+        
+        Args:
+            embeddings_chosen: [batch, seq_len, embed_dim]
+            embeddings_rejected: [batch, seq_len, embed_dim]
+            return_trajectories: If True, return per-timestep values
+        
+        Returns:
+            Same format as RecurrentVAEModel for compatibility
+        """
+        batch_size, seq_len, embed_dim = embeddings_chosen.shape
+        device = embeddings_chosen.device
+        
+        # Encode all observation pairs first
+        all_pairs = []
+        for t in range(seq_len):
+            e_chosen = embeddings_chosen[:, t, :]
+            e_rejected = embeddings_rejected[:, t, :]
+            pair = torch.cat([e_chosen, e_rejected], dim=-1)  # [batch, 2*embed_dim]
+            pair_encoded = self.encoder.pair_encoder(pair)  # [batch, hidden_dim]
+            all_pairs.append(pair_encoded)
+        
+        sequence_pairs = torch.stack(all_pairs, dim=1)  # [batch, seq_len, hidden_dim]
+        
+        # Storage for trajectories
+        if return_trajectories:
+            all_mu = []
+            all_logvar = []
+            all_z = []
+            all_rewards_chosen = []
+            all_rewards_rejected = []
+        
+        # Process each timestep with attention over previous context
+        for t in range(seq_len):
+            e_chosen = embeddings_chosen[:, t, :]
+            e_rejected = embeddings_rejected[:, t, :]
+            
+            # Attend to all observations up to and including current timestep
+            mu, logvar = self.encoder(sequence_pairs[:, :t+1, :], current_timestep=t)
+            
+            # Sample z
+            if self.training:
+                z = self.reparameterization(mu, logvar)
+            else:
+                z = mu  # Use mean during evaluation
+            
+            # Predict rewards
+            r_chosen, r_rejected = self.decoder(e_chosen, e_rejected, z)
+            
+            if return_trajectories:
+                all_mu.append(mu)
+                all_logvar.append(logvar)
+                all_z.append(z)
+                all_rewards_chosen.append(r_chosen)
+                all_rewards_rejected.append(r_rejected)
+        
+        # Return format matching RecurrentVAEModel
+        if return_trajectories:
+            return {
+                'mu': torch.stack(all_mu, dim=1),
+                'logvar': torch.stack(all_logvar, dim=1),
+                'z': torch.stack(all_z, dim=1),
+                'rewards_chosen': torch.stack(all_rewards_chosen, dim=1),
+                'rewards_rejected': torch.stack(all_rewards_rejected, dim=1)
+            }
+        else:
+            return mu, logvar, z, r_chosen, r_rejected
+    
+    def save_model(self, path: str):
+        """Save model to disk."""
+        torch.save(self.state_dict(), path)
+    
+    def load_model(self, path: str):
+        """Load model from disk."""
+        self.load_state_dict(torch.load(path))
+
+
 class RecurrentVAETrainer(Trainer):
     """
     Custom trainer with temporal weighting and cyclical annealing.
@@ -505,6 +748,207 @@ class RecurrentVAETrainer(Trainer):
     def compute_metrics(cls, eval_prediction):
         # ... (Metrics logic remains identical to previous version) ...
         # Copied for completeness
+        rewards_chosen, rewards_rejected, mu, logvar = eval_prediction.predictions
+        rewards_chosen = torch.from_numpy(rewards_chosen)
+        rewards_rejected = torch.from_numpy(rewards_rejected)
+        mu = torch.from_numpy(mu)
+        logvar = torch.from_numpy(logvar)
+        
+        accuracy = (rewards_chosen > rewards_rejected).float().mean()
+        
+        seq_len = rewards_chosen.shape[1]
+        per_timestep_acc = []
+        for t in range(seq_len):
+            acc_t = (rewards_chosen[:, t] > rewards_rejected[:, t]).float().mean()
+            per_timestep_acc.append(acc_t.item())
+        
+        btl_loss = -F.logsigmoid(rewards_chosen - rewards_rejected).mean()
+        kl_loss = standard_kl_div(mu[:, -1], logvar[:, -1])
+        
+        metrics = {
+            'accuracy': accuracy.item(),
+            'btl_loss': btl_loss.item(),
+            'kl_loss': kl_loss.item(),
+        }
+        for t, acc in enumerate(per_timestep_acc):
+            metrics[f'acc_t{t}'] = acc
+        
+        return metrics
+
+
+class TransformerVAETrainer(Trainer):
+    """
+    Trainer for TransformerVAEModel - uses self-attention instead of LSTM.
+    
+    Most logic is the same as RecurrentVAETrainer, but compute_loss is different
+    because we don't need to maintain hidden states - the Transformer handles
+    the sequential context internally.
+    """
+    
+    def __init__(
+        self,
+        *args,
+        seq_length: int = 10,
+        latent_dim: int = 512,
+        beta_max: float = 0.1,
+        beta_cycles: int = 4,
+        temporal_gamma: float = 1.1,
+        free_bits: float = 6.4,
+        **kwargs
+    ):
+        super().__init__(*args, **kwargs)
+        
+        self.seq_length = seq_length
+        self.latent_dim = latent_dim
+        self.temporal_gamma = temporal_gamma
+        self.free_bits = free_bits
+        
+        # Estimate total steps
+        if self.args.max_steps > 0:
+            total_steps = self.args.max_steps
+        else:
+            total_steps = len(self.train_dataset) * self.args.num_train_epochs // self.args.per_device_train_batch_size
+            
+        self.kl_annealer = CyclicalKLAnnealer(beta_max, total_steps, n_cycles=beta_cycles)
+        
+        print(f"TransformerVAETrainer initialized:")
+        print(f"  Seq Length: {seq_length}")
+        print(f"  Temporal Gamma: {temporal_gamma}")
+        print(f"  Cyclical Annealing: Max Beta {beta_max}, Cycles {beta_cycles}")
+        print(f"  Free Bits Threshold: {free_bits}")
+        print(f"  Architecture: Self-Attention (Transformer)")
+    
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        """
+        Compute loss for TransformerVAEModel.
+        
+        Unlike RecurrentVAETrainer, we don't need to manually track LSTM states.
+        The model handles the sequential context through self-attention internally.
+        """
+        embeddings_chosen = inputs['embeddings_chosen']
+        embeddings_rejected = inputs['embeddings_rejected']
+        
+        batch_size, seq_len, embed_dim = embeddings_chosen.shape
+        device = embeddings_chosen.device
+        
+        # Encode all observation pairs (done once, reused for all timesteps)
+        all_pairs = []
+        for t in range(seq_len):
+            e_chosen = embeddings_chosen[:, t, :]
+            e_rejected = embeddings_rejected[:, t, :]
+            pair = torch.cat([e_chosen, e_rejected], dim=-1)
+            pair_encoded = model.encoder.pair_encoder(pair)
+            all_pairs.append(pair_encoded)
+        
+        sequence_pairs = torch.stack(all_pairs, dim=1)  # [batch, seq_len, hidden_dim]
+        
+        # Initialize storage
+        prev_mu = torch.zeros(batch_size, self.latent_dim).to(device)
+        prev_logvar = torch.zeros(batch_size, self.latent_dim).to(device)
+        
+        total_loss = 0.0
+        total_recon = 0.0
+        total_kl = 0.0
+        
+        if model.training and not return_outputs:
+            self.kl_annealer.step()
+        
+        beta = self.kl_annealer.get_beta()
+        
+        if return_outputs:
+            all_rewards_chosen = []
+            all_rewards_rejected = []
+            all_mu = []
+            all_logvar = []
+        
+        # Process each timestep
+        for t in range(seq_len):
+            e_chosen = embeddings_chosen[:, t, :]
+            e_rejected = embeddings_rejected[:, t, :]
+            
+            # Encode using attention over all observations up to current timestep
+            curr_mu, curr_logvar = model.encoder(sequence_pairs[:, :t+1, :], current_timestep=t)
+            
+            # Sample z
+            z = model.reparameterization(curr_mu, curr_logvar)
+            
+            # Decode
+            r_chosen, r_rejected = model.decoder(e_chosen, e_rejected, z)
+            
+            # Reconstruction loss (BTL)
+            recon_loss = -torch.log_sigmoid(r_chosen - r_rejected).mean()
+            
+            # KL divergence with free bits
+            if t == 0:
+                # First timestep: KL to N(0,1)
+                kl_raw = standard_kl_div(curr_mu, curr_logvar)
+            else:
+                # Subsequent timesteps: KL to previous belief
+                kl_raw = recursive_kl_div(curr_mu, curr_logvar, prev_mu, prev_logvar)
+            
+            # Apply free bits threshold
+            kl_loss = torch.clamp(kl_raw, min=self.free_bits / self.latent_dim * batch_size)
+            
+            # Temporal weighting
+            weight = self.temporal_gamma ** t
+            
+            # Weighted loss for this timestep
+            total_loss += weight * (recon_loss + beta * kl_loss)
+            total_recon += weight * recon_loss
+            total_kl += weight * kl_loss
+            
+            # Update previous belief for next iteration
+            prev_mu = curr_mu.detach()
+            prev_logvar = curr_logvar.detach()
+            
+            if return_outputs:
+                all_rewards_chosen.append(r_chosen.detach())
+                all_rewards_rejected.append(r_rejected.detach())
+                all_mu.append(curr_mu.detach())
+                all_logvar.append(curr_logvar.detach())
+        
+        # Normalize by sum of weights
+        weight_sum = sum(self.temporal_gamma ** t for t in range(seq_len))
+        total_loss = total_loss / weight_sum
+        avg_recon = total_recon / weight_sum
+        avg_kl = total_kl / weight_sum
+        
+        if not return_outputs and self.state.global_step % 10 == 0:
+            self.log({
+                'train_loss': total_loss.item(),
+                'train_recon': avg_recon.item(),
+                'train_kl': avg_kl.item(),
+                'beta': beta
+            })
+        
+        if return_outputs:
+            return total_loss, {
+                'rewards_chosen': torch.stack(all_rewards_chosen, dim=1),
+                'rewards_rejected': torch.stack(all_rewards_rejected, dim=1),
+                'mu': torch.stack(all_mu, dim=1),
+                'logvar': torch.stack(all_logvar, dim=1),
+            }
+        else:
+            return total_loss
+    
+    def create_scheduler(self, num_training_steps: int, optimizer=None):
+        """Reuse scheduler from RecurrentVAETrainer."""
+        scheduler = get_cosine_schedule_with_warmup(
+            optimizer,
+            num_warmup_steps=int(0.03 * num_training_steps),
+            num_training_steps=num_training_steps
+        )
+        self.lr_scheduler = scheduler
+        return scheduler
+    
+    def on_step_end(self, args, state, control, **kwargs):
+        """Update KL annealer (reuse from RecurrentVAETrainer)."""
+        self.kl_annealer.step()
+        return super().on_step_end(args, state, control, **kwargs)
+    
+    @classmethod
+    def compute_metrics(cls, eval_prediction):
+        """Reuse metrics computation from RecurrentVAETrainer."""
         rewards_chosen, rewards_rejected, mu, logvar = eval_prediction.predictions
         rewards_chosen = torch.from_numpy(rewards_chosen)
         rewards_rejected = torch.from_numpy(rewards_rejected)
