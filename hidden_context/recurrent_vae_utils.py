@@ -876,7 +876,7 @@ class TransformerVAETrainer(Trainer):
             r_chosen, r_rejected = model.decoder(e_chosen, e_rejected, z)
             
             # Reconstruction loss (BTL)
-            recon_loss = -torch.log_sigmoid(r_chosen - r_rejected).mean()
+            recon_loss = -F.logsigmoid(r_chosen - r_rejected).mean()
             
             # KL divergence with free bits
             if t == 0:

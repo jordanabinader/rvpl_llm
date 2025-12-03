@@ -87,6 +87,9 @@ GAMMA=1.1
 
 # Experiment name
 EXP_NAME="prism_seq${SEQ_LENGTH}_latent${LATENT_DIM}_hidden${HIDDEN_DIM}_beta${BETA_MAX}_cycles${CYCLES}_gamma${GAMMA}_seed${SEED}"
+
+# W&B Tags for easier filtering
+export WANDB_TAGS="lstm,seq${SEQ_LENGTH},latent${LATENT_DIM},beta${BETA_MAX},seed${SEED}"
 OUTPUT_DIR="experiments/streaming_vpl_prism/${EXP_NAME}"
 
 echo "Configuration:"

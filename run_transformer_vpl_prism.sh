@@ -72,6 +72,9 @@ GAMMA=1.1
 # Experiment name with "transformer" tag
 EXP_NAME="transformer_prism_seq${SEQ_LENGTH}_latent${LATENT_DIM}_hidden${HIDDEN_DIM}_beta${BETA_MAX}_heads${NUM_HEADS}_layers${NUM_LAYERS}_seed${SEED}"
 
+# W&B Tags for easier filtering
+export WANDB_TAGS="transformer,seq${SEQ_LENGTH},latent${LATENT_DIM},heads${NUM_HEADS},layers${NUM_LAYERS},beta${BETA_MAX},seed${SEED}"
+
 echo "========================================="
 echo "Transformer VPL Training on PRISM"
 echo "========================================="
