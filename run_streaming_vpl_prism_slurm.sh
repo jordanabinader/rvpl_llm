@@ -134,8 +134,27 @@ echo "=========================================="
 # Re-enable W&B for evaluation (it logs separately)
 export WANDB_MODE=online
 
+# Find the actual model checkpoint (training creates nested directory structure)
+echo "Searching for model checkpoint..."
+MODEL_PATH=$(find experiments/streaming_vpl_prism -name "model.pt" -path "*/final_checkpoint/*" -type f 2>/dev/null | grep -E "(${EXP_NAME}|both_seq${SEQ_LENGTH})" | tail -1)
+
+if [ -z "$MODEL_PATH" ]; then
+    echo "Error: Could not find model.pt for experiment"
+    echo "Searched for patterns: ${EXP_NAME} or both_seq${SEQ_LENGTH}"
+    echo ""
+    echo "Available model checkpoints:"
+    find experiments/streaming_vpl_prism -name "model.pt" -path "*/final_checkpoint/*" 2>/dev/null || echo "  (none found)"
+    exit 1
+fi
+
+echo "Found model at: $MODEL_PATH"
+
+# Determine evaluation output directory (same level as final_checkpoint)
+EVAL_DIR=$(dirname $(dirname ${MODEL_PATH}))/evaluation
+echo "Evaluation results will be saved to: $EVAL_DIR"
+
 python -m hidden_context.evaluate_streaming_vpl \
-    --model_path ${OUTPUT_DIR}/final_checkpoint/model.pt \
+    --model_path ${MODEL_PATH} \
     --data_path data_release/prism/gpt2 \
     --seq_length ${SEQ_LENGTH} \
     --latent_dim ${LATENT_DIM} \
@@ -143,17 +162,21 @@ python -m hidden_context.evaluate_streaming_vpl \
     --encoder_embed_dim 768 \
     --decoder_embed_dim 768 \
     --num_eval_episodes 200 \
-    --output_dir ${OUTPUT_DIR}/evaluation \
+    --output_dir ${EVAL_DIR} \
     --seed ${SEED}
 
 echo ""
 echo "========================================="
 echo "Complete!"
 echo "========================================="
-echo "Training results: ${OUTPUT_DIR}"
-echo "Evaluation results: ${OUTPUT_DIR}/evaluation/"
+echo "Model: ${MODEL_PATH}"
+echo "Evaluation results: ${EVAL_DIR}"
 echo ""
 echo "To view results:"
-echo "  cat ${OUTPUT_DIR}/evaluation/results.json"
+echo "  cat ${EVAL_DIR}/results.json"
+echo "  open ${EVAL_DIR}/adaptation_curve.png"
+echo ""
+echo "View on W&B:"
+echo "  https://wandb.ai/$(whoami)/streaming-vpl-prism"
 echo "========================================="
 
