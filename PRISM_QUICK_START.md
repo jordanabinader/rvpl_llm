@@ -61,6 +61,8 @@ bash generate_prism_embeddings.sh
 **Time**: ~1-2 hours with GPU
 
 ### Step 3: Train Model
+
+#### Option A: Local/Interactive Training
 ```bash
 bash run_streaming_vpl_prism.sh
 ```
@@ -71,7 +73,25 @@ bash run_streaming_vpl_prism.sh SEQ_LENGTH LATENT_DIM BETA SEED
 # Example: bash run_streaming_vpl_prism.sh 10 512 0.1 0
 ```
 
-**Output**: `experiments/streaming_vpl_prism/prism_seq10_latent512_beta0.1_seed0/`
+#### Option B: SLURM Cluster Submission
+```bash
+sbatch run_streaming_vpl_prism_slurm.sh
+```
+
+**Configuration** (all optional):
+```bash
+sbatch run_streaming_vpl_prism_slurm.sh SEQ_LENGTH LATENT_DIM HIDDEN_DIM BETA_MAX SEED
+# Example: sbatch run_streaming_vpl_prism_slurm.sh 10 512 512 0.1 0
+```
+
+**Features**:
+- Auto-creates virtual environment
+- Installs dependencies
+- Trains model
+- Runs evaluation
+- Saves logs to `logs/streaming_vpl_prism_*.out`
+
+**Output**: `experiments/streaming_vpl_prism/prism_seq10_latent512_hidden512_beta0.1_cycles4_gamma1.1_seed0/`
 
 ## Key Differences from HH-RLHF
 
@@ -96,6 +116,29 @@ if "prism" in script_args.data_path.lower():
 
 No code changes needed - just point to PRISM data directory!
 
+## W&B Visualizations
+
+Both training and evaluation automatically log comprehensive metrics to Weights & Biases:
+
+### Training Metrics (Real-time)
+- **Loss curves**: `train_loss`, `train_recon`, `train_kl`
+- **KL annealing schedule**: `beta` over time
+- **Learning dynamics**: `grad_norm`, `learning_rate`
+- **Evaluation metrics**: Periodic accuracy checks
+
+### Evaluation Metrics
+- **Adaptation curve**: Accuracy improvement over timesteps (t=0 to t=10)
+- **Per-timestep accuracies**: Table and line plots
+- **Initial vs Final accuracy**: Bar chart comparison
+- **Overall statistics**: Improvement, mean accuracy, adaptation status
+
+### Access Your Runs
+```bash
+# View W&B dashboard
+wandb login  # First time only
+# Then visit: https://wandb.ai/your-username/streaming-vpl-prism
+```
+
 ## Expected Results
 
 With PRISM, you should see:
@@ -104,6 +147,7 @@ With PRISM, you should see:
 2. **Turn-Order Effects**: Performance improves with sequential turns
 3. **Hard Negative Challenge**: Close ratings (75 vs 72) are harder than extreme pairs (90 vs 40)
 4. **Realistic Preferences**: Complex, multidimensional user preferences vs synthetic splits
+5. **Strong Adaptation**: 10-20% accuracy improvement from t=0 to t=10 (if working correctly)
 
 ## Troubleshooting
 

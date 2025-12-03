@@ -16,6 +16,7 @@
 # Environment setup     #
 #########################
 
+<<<<<<< Updated upstream
 # Create logs directory
 mkdir -p logs
 export WANDB_MODE=disabled
@@ -28,6 +29,16 @@ module load miniforge
 if [ ! -d "venv" ]; then
     echo "Creating virtual environment..."
     python -m venv venv
+=======
+# W&B Configuration
+export WANDB_MODE=online
+export WANDB_PROJECT="streaming-vpl-prism"
+
+# Check if virtual environment is activated
+if [ -z "$VIRTUAL_ENV" ]; then
+    echo "Activating virtual environment..."
+    source vnev/bin/activate
+>>>>>>> Stashed changes
 fi
 
 # 3. Activate the environment (Fixing the typo here: vnev -> venv)

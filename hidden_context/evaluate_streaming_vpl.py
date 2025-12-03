@@ -14,10 +14,12 @@ import torch
 from torch.utils.data import DataLoader
 from transformers import HfArgumentParser
 import matplotlib.pyplot as plt
+import wandb
 
 # Import our custom modules
 from .data_utils.sequential_pets_dataset import SequentialPetsDataset, sequential_collate_fn
 from .data_utils.sequential_hh_dataset import SequentialHHDataset, sequential_hh_collate_fn
+from .data_utils.sequential_prism_dataset import SequentialPRISMDataset, sequential_prism_collate_fn
 from .recurrent_vae_utils import RecurrentVAEModel
 
 
@@ -245,11 +247,41 @@ def main():
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
     
+    # Initialize W&B for evaluation logging
+    # Extract experiment name from model path
+    exp_name = os.path.basename(os.path.dirname(os.path.dirname(args.model_path)))
+    wandb.init(
+        project="streaming-vpl-prism" if "prism" in args.data_path.lower() else "streaming-vpl",
+        name=f"{exp_name}_eval",
+        config={
+            "model_path": args.model_path,
+            "data_path": args.data_path,
+            "data_subset": getattr(args, 'data_subset', 'N/A'),
+            "seq_length": args.seq_length,
+            "latent_dim": args.latent_dim,
+            "hidden_dim": args.hidden_dim,
+            "num_eval_episodes": args.num_eval_episodes,
+            "seed": args.seed,
+        },
+        tags=["evaluation", "adaptation_curve"],
+        reinit=True
+    )
+    
     # Load test dataset
     print("Loading test dataset...")
     
     # Detect dataset type based on path
-    if "hh" in args.data_path.lower():
+    if "prism" in args.data_path.lower():
+        print("Using PRISM dataset")
+        test_dataset = SequentialPRISMDataset(
+            data_path=args.data_path,
+            split="test",
+            seq_length=args.seq_length,
+            epoch_size=args.num_eval_episodes,
+            seed=args.seed
+        )
+        collate_fn = sequential_prism_collate_fn
+    elif "hh" in args.data_path.lower():
         print("Using HH-RLHF dataset")
         test_dataset = SequentialHHDataset(
             data_path=args.data_path,
@@ -326,15 +358,64 @@ def main():
     plot_path = os.path.join(args.output_dir, 'adaptation_curve.png')
     plot_adaptation_curve(results, args.seq_length, plot_path)
     
+    # Log everything to W&B
+    print("\nLogging results to W&B...")
+    
+    # Log summary metrics
+    wandb.log({
+        "eval/overall_accuracy": results['overall_accuracy'],
+        "eval/initial_accuracy": results['initial_accuracy'],
+        "eval/final_accuracy": results['final_accuracy'],
+        "eval/improvement": results['improvement'],
+    })
+    
+    # Log per-timestep accuracies as a table
+    timestep_table = wandb.Table(
+        columns=["timestep", "accuracy", "std"],
+        data=[[t, mean, std] for t, (mean, std) in enumerate(zip(results['mean_accuracies'], results['std_accuracies']))]
+    )
+    wandb.log({"eval/timestep_accuracies": timestep_table})
+    
+    # Log adaptation curve as image
+    wandb.log({"eval/adaptation_curve": wandb.Image(plot_path)})
+    
+    # Log per-timestep accuracies as line plot
+    for t, mean in enumerate(results['mean_accuracies']):
+        wandb.log({"eval/accuracy_by_timestep": mean}, step=t)
+    
+    # Log improvement visualization
+    fig, ax = plt.subplots(figsize=(6, 4))
+    ax.bar(['Initial (t=0)', f'Final (t={args.seq_length-1})'], 
+           [results['initial_accuracy'], results['final_accuracy']],
+           color=['#e74c3c', '#27ae60'])
+    ax.set_ylabel('Accuracy')
+    ax.set_ylim([0, 1])
+    ax.set_title('Adaptation: Initial vs Final Accuracy')
+    ax.grid(axis='y', alpha=0.3)
+    for i, v in enumerate([results['initial_accuracy'], results['final_accuracy']]):
+        ax.text(i, v + 0.02, f'{v:.1%}', ha='center', va='bottom', fontweight='bold')
+    plt.tight_layout()
+    wandb.log({"eval/initial_vs_final": wandb.Image(fig)})
+    plt.close(fig)
+    
     print("\nEvaluation complete!")
     
     # Check if adaptation is working
     if results['improvement'] > 0.1:
-        print("✓ Strong adaptation observed! The model learns user preferences over time.")
+        adaptation_status = "✓ Strong adaptation observed! The model learns user preferences over time."
+        wandb.run.summary["adaptation_status"] = "strong"
     elif results['improvement'] > 0.05:
-        print("~ Moderate adaptation observed. Consider tuning hyperparameters.")
+        adaptation_status = "~ Moderate adaptation observed. Consider tuning hyperparameters."
+        wandb.run.summary["adaptation_status"] = "moderate"
     else:
-        print("✗ Weak adaptation. Model may not be learning sequential patterns effectively.")
+        adaptation_status = "✗ Weak adaptation. Model may not be learning sequential patterns effectively."
+        wandb.run.summary["adaptation_status"] = "weak"
+    
+    print(adaptation_status)
+    wandb.run.summary["adaptation_message"] = adaptation_status
+    
+    # Finish W&B run
+    wandb.finish()
 
 
 if __name__ == "__main__":
