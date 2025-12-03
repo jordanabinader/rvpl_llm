@@ -104,7 +104,11 @@ def evaluate_adaptation(
             # Move batch to device
             embeddings_chosen = batch['embeddings_chosen'].to(device)
             embeddings_rejected = batch['embeddings_rejected'].to(device)
-            user_types = batch['user_type'].to(device)
+            
+            # Handle both user_type (HH-RLHF, Pets) and user_ids (PRISM)
+            if 'user_type' in batch:
+                user_types = batch['user_type'].to(device)
+            # user_ids not needed for evaluation, just for logging
             
             batch_size = embeddings_chosen.shape[0]
             
@@ -263,8 +267,7 @@ def main():
             "num_eval_episodes": args.num_eval_episodes,
             "seed": args.seed,
         },
-        tags=["evaluation", "adaptation_curve"],
-        reinit=True
+        tags=["evaluation", "adaptation_curve"]
     )
     
     # Load test dataset
