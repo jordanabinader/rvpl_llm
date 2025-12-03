@@ -149,6 +149,10 @@ class ScriptArguments:
         default=False,
         metadata={"help": "Resume training from checkpoint"}
     )
+    run_id: str = field(
+        default=None,
+        metadata={"help": "Run ID for subdir"}
+    )
 
 
 def set_seed(seed: int):
@@ -297,6 +301,9 @@ if __name__ == "__main__":
             f"cycles{script_args.beta_cycles}_gamma{script_args.temporal_gamma}_"
             f"seed{script_args.seed}"
         )
+    
+    if script_args.run_id:
+        output_dir = os.path.join(output_dir, script_args.run_id)
     
     training_args = TrainingArguments(
         output_dir=output_dir,

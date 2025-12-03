@@ -661,10 +661,7 @@ class RecurrentVAETrainer(Trainer):
         total_kl = 0.0
         num_valid_steps = 0  # Count non-padded steps
         
-        # Step annealer during training (on_step_end not reliably called)
-        if model.training and not return_outputs:
-            self.kl_annealer.step()
-        
+        # KL annealer is stepped in on_step_end, not here
         beta = self.kl_annealer.get_beta()
         
         if return_outputs:
@@ -794,8 +791,13 @@ class RecurrentVAETrainer(Trainer):
         self.lr_scheduler = scheduler
         return scheduler
     
-    # NOTE: on_step_end is not reliably called by HF Trainer in all configurations
-    # We now step the annealer directly in compute_loss instead
+    def on_step_end(self, args, state, control, **kwargs):
+        self.kl_annealer.step()
+        # Log beta every 100 steps for debugging
+        if state.global_step % 100 == 0:
+            current_beta = self.kl_annealer.get_beta()
+            print(f"Step {state.global_step}: beta = {current_beta:.6f}, annealer.current_step = {self.kl_annealer.current_step}")
+        return super().on_step_end(args, state, control, **kwargs)
 
     @classmethod
     def compute_metrics(cls, eval_prediction):
@@ -909,10 +911,9 @@ class TransformerVAETrainer(Trainer):
         total_weight = 0.0  # Sum of weights for valid steps
         num_valid_steps = 0  # Count non-padded steps
         
-        # Step annealer during training (on_step_end not reliably called)
         if model.training and not return_outputs:
             self.kl_annealer.step()
-        
+        # KL annealer is stepped in on_step_end, not here
         beta = self.kl_annealer.get_beta()
         
         if return_outputs:
@@ -1030,8 +1031,14 @@ class TransformerVAETrainer(Trainer):
         self.lr_scheduler = scheduler
         return scheduler
     
-    # NOTE: on_step_end is not reliably called by HF Trainer in all configurations
-    # We now step the annealer directly in compute_loss instead
+    def on_step_end(self, args, state, control, **kwargs):
+        """Update KL annealer (reuse from RecurrentVAETrainer)."""
+        self.kl_annealer.step()
+        # Log beta every 100 steps for debugging
+        if state.global_step % 100 == 0:
+            current_beta = self.kl_annealer.get_beta()
+            print(f"Step {state.global_step}: beta = {current_beta:.6f}, annealer.current_step = {self.kl_annealer.current_step}")
+        return super().on_step_end(args, state, control, **kwargs)
     
     @classmethod
     def compute_metrics(cls, eval_prediction):

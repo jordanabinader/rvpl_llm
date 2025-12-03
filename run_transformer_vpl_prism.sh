@@ -53,24 +53,29 @@ echo "Package versions in venv:"
 python -c "import transformers; print(f'transformers: {transformers.__version__}')"
 python -c "import torch; print(f'torch: {torch.__version__}')"
 
+# get the slurm job id
+RUN_ID="slurm_${SLURM_JOB_ID:-local}"
+
 #########################
 # Configuration         #
 #########################
 
-SEQ_LENGTH=${1:-10}
-LATENT_DIM=${2:-512}
+SEQ_LENGTH=${1:-6}
+LATENT_DIM=${2:-128}
 HIDDEN_DIM=${3:-512}
 BETA_MAX=${4:-0.1}
 NUM_HEADS=${5:-4}
 NUM_LAYERS=${6:-2}
 SEED=${7:-0}
-
+EPOCH_SIZE=${8:-4000}
+FREE_BITS=${9:-6.4}
+DATA_SUBSET=${10:-both}
 # Fixed hyperparameters
 CYCLES=4
 GAMMA=1.1
 
 # Experiment name with "transformer" tag
-EXP_NAME="transformer_prism_seq${SEQ_LENGTH}_latent${LATENT_DIM}_hidden${HIDDEN_DIM}_beta${BETA_MAX}_heads${NUM_HEADS}_layers${NUM_LAYERS}_seed${SEED}"
+EXP_NAME="${DATA_SUBSET}_seq${SEQ_LENGTH}_latent${LATENT_DIM}_hidden${HIDDEN_DIM}_beta${BETA_MAX}_freebits${FREE_BITS}_cycles${CYCLES}_gamma${GAMMA}_seed${SEED}"
 
 # W&B Tags for easier filtering
 export WANDB_TAGS="transformer,seq${SEQ_LENGTH},latent${LATENT_DIM},heads${NUM_HEADS},layers${NUM_LAYERS},beta${BETA_MAX},seed${SEED}"
@@ -96,6 +101,7 @@ echo ""
 
 python -m hidden_context.train_streaming_vpl \
     --data_path data_release/prism/gpt2 \
+    --data_subset ${DATA_SUBSET} \
     --seq_length ${SEQ_LENGTH} \
     --latent_dim ${LATENT_DIM} \
     --hidden_dim ${HIDDEN_DIM} \
@@ -108,7 +114,9 @@ python -m hidden_context.train_streaming_vpl \
     --beta_max ${BETA_MAX} \
     --beta_cycles ${CYCLES} \
     --temporal_gamma ${GAMMA} \
-    --learning_rate 1e-4 \
+    --free_bits ${FREE_BITS} \
+    --epoch_size ${EPOCH_SIZE} \
+    --learning_rate 2e-4 \
     --num_train_epochs 10 \
     --per_device_train_batch_size 8 \
     --per_device_eval_batch_size 8 \
@@ -116,7 +124,8 @@ python -m hidden_context.train_streaming_vpl \
     --save_steps 500 \
     --log_dir experiments/streaming_vpl_prism \
     --seed ${SEED} \
-    --bf16 True
+    --bf16 True \
+    --run_id ${RUN_ID}
 
 echo ""
 echo "========================================="
@@ -125,14 +134,7 @@ echo "=========================================="
 
 # Find the trained model
 echo "Searching for model checkpoint..."
-MODEL_PATH=$(find experiments/streaming_vpl_prism -name "model.pt" -path "*/final_checkpoint/*" -type f 2>/dev/null | grep -E "seq${SEQ_LENGTH}" | tail -1)
-
-if [ -z "$MODEL_PATH" ]; then
-    echo "Error: Could not find model checkpoint"
-    echo "Available models:"
-    find experiments/streaming_vpl_prism -name "model.pt" -path "*/final_checkpoint/*" 2>/dev/null
-    exit 1
-fi
+MODEL_PATH="experiments/streaming_vpl_prism/${EXP_NAME}/${RUN_ID}/final_checkpoint/model.pt"
 
 echo "Found model at: $MODEL_PATH"
 EVAL_DIR=$(dirname $(dirname ${MODEL_PATH}))/evaluation
@@ -140,6 +142,7 @@ EVAL_DIR=$(dirname $(dirname ${MODEL_PATH}))/evaluation
 python -m hidden_context.evaluate_streaming_vpl \
     --model_path ${MODEL_PATH} \
     --data_path data_release/prism/gpt2 \
+    --data_subset ${DATA_SUBSET} \
     --seq_length ${SEQ_LENGTH} \
     --latent_dim ${LATENT_DIM} \
     --hidden_dim ${HIDDEN_DIM} \

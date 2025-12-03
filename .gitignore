@@ -163,3 +163,4 @@ evaluation_results/
 
 test_*.py
 *.md
+*.out
