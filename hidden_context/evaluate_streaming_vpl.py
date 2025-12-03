@@ -106,10 +106,12 @@ def evaluate_adaptation(
     model.eval()
     model.to(device)
     
-    # Storage for per-timestep accuracies
+    # Storage for per-timestep accuracies and uncertainty metrics
     accuracies_per_timestep = [[] for _ in range(seq_length)]
     all_rewards_chosen = [[] for _ in range(seq_length)]
     all_rewards_rejected = [[] for _ in range(seq_length)]
+    all_variances = [[] for _ in range(seq_length)]  # Track uncertainty (variance)
+    all_logvars = [[] for _ in range(seq_length)]  # Track raw logvar for plotting
     
     with torch.no_grad():
         for batch_idx, batch in enumerate(dataloader):
@@ -175,14 +177,26 @@ def evaluate_adaptation(
                     
                     # Compute accuracy (exclude padded samples entirely)
                     correct = (r_chosen > r_rejected).float().squeeze(-1)  # [batch]
+                    
+                    # Compute uncertainty: average variance across latent dimensions
+                    variance = torch.exp(logvar)  # Convert log variance to variance
+                    avg_variance = variance.mean(dim=-1)  # [batch]
+                    
                     if mask is not None:
                         valid = step_mask.bool()  # [batch]
                         correct = correct[valid]  # keep only real timesteps
                         r_chosen = r_chosen[valid]
                         r_rejected = r_rejected[valid]
+                        avg_variance = avg_variance[valid]
+                        logvar_store = logvar[valid]
+                    else:
+                        logvar_store = logvar
+                    
                     accuracies_per_timestep[t].append(correct.cpu())
                     all_rewards_chosen[t].append(r_chosen.cpu())
                     all_rewards_rejected[t].append(r_rejected.cpu())
+                    all_variances[t].append(avg_variance.cpu())
+                    all_logvars[t].append(logvar_store.cpu())
             else:
                 # Recurrent: maintain LSTM hidden and cell states
                 h_curr = torch.zeros(batch_size, model.latent_dim).to(device)
@@ -218,17 +232,28 @@ def evaluate_adaptation(
                     
                     # Compute accuracy (exclude padded samples entirely)
                     correct = (r_chosen > r_rejected).float().squeeze(-1)  # [batch]
+                    
+                    # Compute uncertainty: average variance across latent dimensions
+                    variance = torch.exp(logvar)  # Convert log variance to variance
+                    avg_variance = variance.mean(dim=-1)  # [batch]
+                    
                     if mask is not None:
                         valid = step_mask.bool()  # [batch]
                         correct = correct[valid]  # keep only real timesteps
                         r_chosen_store = r_chosen[valid]
                         r_rejected_store = r_rejected[valid]
+                        avg_variance = avg_variance[valid]
+                        logvar_store = logvar[valid]
                     else:
                         r_chosen_store = r_chosen
                         r_rejected_store = r_rejected
+                        logvar_store = logvar
+                    
                     accuracies_per_timestep[t].append(correct.cpu())
                     all_rewards_chosen[t].append(r_chosen_store.cpu())
                     all_rewards_rejected[t].append(r_rejected_store.cpu())
+                    all_variances[t].append(avg_variance.cpu())
+                    all_logvars[t].append(logvar_store.cpu())
                     
                     # Now update belief with observation t for next iteration
                     mu, logvar, h_curr, c_curr = model.encoder(e_chosen, e_rejected, h_curr, c_curr)
@@ -236,18 +261,23 @@ def evaluate_adaptation(
     # Aggregate results
     mean_accuracies = []
     std_accuracies = []
+    mean_variances = []
+    std_variances = []
     valid_counts = []
     
     for t in range(seq_length):
         accs = torch.cat(accuracies_per_timestep[t])
+        vars = torch.cat(all_variances[t])
         valid_counts.append(accs.numel())
         mean_accuracies.append(accs.mean().item())
         std_accuracies.append(accs.std().item())
+        mean_variances.append(vars.mean().item())
+        std_variances.append(vars.std().item())
     
     # Print valid sample counts per timestep for debugging
     print("\nValid samples per timestep:")
     for t in range(seq_length):
-        print(f"  t={t}: {valid_counts[t]} samples, accuracy={mean_accuracies[t]:.2%}")
+        print(f"  t={t}: {valid_counts[t]} samples, accuracy={mean_accuracies[t]:.2%}, variance={mean_variances[t]:.4f}")
     
     # Compute overall statistics
     # Only use timesteps with sufficient data (min 50 samples or 25% of episodes)
@@ -269,13 +299,28 @@ def evaluate_adaptation(
     
     print(f"\nUsing t={final_t} (n={valid_counts[final_t]}) for final accuracy (not t={seq_length-1} with n={valid_counts[-1]})")
     
+    # Compute uncertainty reduction (initial variance - final variance)
+    initial_variance = mean_variances[0]
+    final_variance = mean_variances[final_t]
+    uncertainty_reduction = initial_variance - final_variance
+    
+    print(f"\nUncertainty Metrics:")
+    print(f"  Initial variance: {initial_variance:.4f}")
+    print(f"  Final variance: {final_variance:.4f}")
+    print(f"  Uncertainty reduction: {uncertainty_reduction:.4f} ({-100*uncertainty_reduction/initial_variance:.1f}%)")
+    
     return {
         'mean_accuracies': mean_accuracies,
         'std_accuracies': std_accuracies,
+        'mean_variances': mean_variances,
+        'std_variances': std_variances,
         'overall_accuracy': overall_accuracy,
         'initial_accuracy': initial_accuracy,
         'final_accuracy': final_accuracy,
         'improvement': improvement,
+        'initial_variance': initial_variance,
+        'final_variance': final_variance,
+        'uncertainty_reduction': uncertainty_reduction,
     }
 
 
@@ -285,7 +330,7 @@ def plot_adaptation_curve(
     output_path: str
 ):
     """
-    Create and save adaptation curve plot.
+    Create and save adaptation curve plot with accuracy and uncertainty.
     
     Args:
         results: Dictionary with evaluation results
@@ -294,14 +339,18 @@ def plot_adaptation_curve(
     """
     mean_accs = results['mean_accuracies']
     std_accs = results['std_accuracies']
+    mean_vars = results['mean_variances']
+    std_vars = results['std_variances']
     
-    fig, ax = plt.subplots(figsize=(10, 6))
+    # Create figure with two subplots: accuracy and uncertainty
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10))
     
     timesteps = list(range(seq_length))
     
+    # ========== SUBPLOT 1: Accuracy ==========
     # Plot mean accuracy with error bars
-    ax.plot(timesteps, mean_accs, 'b-o', linewidth=2, markersize=8, label='Mean Accuracy')
-    ax.fill_between(
+    ax1.plot(timesteps, mean_accs, 'b-o', linewidth=2, markersize=8, label='Mean Accuracy')
+    ax1.fill_between(
         timesteps,
         [m - s for m, s in zip(mean_accs, std_accs)],
         [m + s for m, s in zip(mean_accs, std_accs)],
@@ -310,29 +359,63 @@ def plot_adaptation_curve(
     )
     
     # Add baseline (random guessing)
-    ax.axhline(y=0.5, color='r', linestyle='--', linewidth=1, label='Random Baseline')
+    ax1.axhline(y=0.5, color='r', linestyle='--', linewidth=1, label='Random Baseline')
     
     # Formatting
-    ax.set_xlabel('Interaction Number (t)', fontsize=14)
-    ax.set_ylabel('Accuracy', fontsize=14)
-    ax.set_title('Sequential Adaptation in Streaming VPL', fontsize=16, fontweight='bold')
-    ax.set_xticks(timesteps)
-    ax.set_ylim([0.4, 1.0])
-    ax.grid(True, alpha=0.3)
-    ax.legend(fontsize=12)
+    ax1.set_xlabel('Interaction Number (t)', fontsize=14)
+    ax1.set_ylabel('Accuracy', fontsize=14)
+    ax1.set_title('Sequential Adaptation in Streaming VPL', fontsize=16, fontweight='bold')
+    ax1.set_xticks(timesteps)
+    ax1.set_ylim([0.4, 1.0])
+    ax1.grid(True, alpha=0.3)
+    ax1.legend(fontsize=12)
     
     # Add annotation showing improvement
     improvement = results['improvement']
-    ax.text(
+    ax1.text(
         0.98, 0.02,
         f"Improvement: {improvement:.1%}\n"
         f"Initial: {results['initial_accuracy']:.1%}\n"
         f"Final: {results['final_accuracy']:.1%}",
-        transform=ax.transAxes,
+        transform=ax1.transAxes,
         fontsize=10,
         verticalalignment='bottom',
         horizontalalignment='right',
         bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5)
+    )
+    
+    # ========== SUBPLOT 2: Uncertainty (Variance) ==========
+    # Plot mean variance with error bars
+    ax2.plot(timesteps, mean_vars, 'g-s', linewidth=2, markersize=8, label='Mean Variance')
+    ax2.fill_between(
+        timesteps,
+        [m - s for m, s in zip(mean_vars, std_vars)],
+        [m + s for m, s in zip(mean_vars, std_vars)],
+        alpha=0.3,
+        color='green'
+    )
+    
+    # Formatting
+    ax2.set_xlabel('Interaction Number (t)', fontsize=14)
+    ax2.set_ylabel('Posterior Variance', fontsize=14)
+    ax2.set_title('Uncertainty Reduction over Time', fontsize=16, fontweight='bold')
+    ax2.set_xticks(timesteps)
+    ax2.grid(True, alpha=0.3)
+    ax2.legend(fontsize=12)
+    
+    # Add annotation showing uncertainty reduction
+    uncertainty_reduction = results['uncertainty_reduction']
+    reduction_pct = -100 * uncertainty_reduction / results['initial_variance'] if results['initial_variance'] > 0 else 0
+    ax2.text(
+        0.98, 0.98,
+        f"Uncertainty Reduction: {reduction_pct:.1f}%\n"
+        f"Initial: {results['initial_variance']:.4f}\n"
+        f"Final: {results['final_variance']:.4f}",
+        transform=ax2.transAxes,
+        fontsize=10,
+        verticalalignment='top',
+        horizontalalignment='right',
+        bbox=dict(boxstyle='round', facecolor='lightgreen', alpha=0.5)
     )
     
     plt.tight_layout()
@@ -347,14 +430,61 @@ def main():
     parser = HfArgumentParser(EvalArguments)
     args: EvalArguments = parser.parse_args_into_dataclasses()[0]
     
+    # Try to load config from checkpoint directory
+    import json
+    checkpoint_dir = os.path.dirname(args.model_path)
+    config_path = os.path.join(checkpoint_dir, "config.json")
+    
+    if os.path.exists(config_path):
+        print(f"Loading config from: {config_path}")
+        with open(config_path, 'r') as f:
+            saved_config = json.load(f)
+        
+        # Override args with saved config (but allow command-line overrides for some fields)
+        # Only override if the arg wasn't explicitly set
+        import sys
+        explicit_args = set()
+        for i, arg in enumerate(sys.argv):
+            if arg.startswith('--'):
+                explicit_args.add(arg[2:])
+        
+        # Map of config keys to arg names
+        config_to_arg = {
+            'seq_length': 'seq_length',
+            'latent_dim': 'latent_dim',
+            'hidden_dim': 'hidden_dim',
+            'encoder_embed_dim': 'encoder_embed_dim',
+            'decoder_embed_dim': 'decoder_embed_dim',
+            'use_transformer': 'use_transformer',
+            'num_attention_heads': 'num_attention_heads',
+            'num_transformer_layers': 'num_transformer_layers',
+            'transformer_dropout': 'transformer_dropout',
+        }
+        
+        for config_key, arg_name in config_to_arg.items():
+            if config_key in saved_config and saved_config[config_key] is not None:
+                if arg_name not in explicit_args:
+                    setattr(args, arg_name, saved_config[config_key])
+                    print(f"  {arg_name}: {saved_config[config_key]} (from config)")
+                else:
+                    print(f"  {arg_name}: {getattr(args, arg_name)} (from command line, overriding config)")
+        print()
+    else:
+        print(f"Warning: No config.json found at {config_path}")
+        print("Using command-line arguments only.")
+        print()
+    
     print("="*80)
     print("Streaming VPL Evaluation")
     print("="*80)
     print(f"Model: {args.model_path}")
     print(f"Data: {args.data_path}/{args.data_subset}")
     print(f"Seq Length: {args.seq_length}")
+    print(f"Latent Dim: {args.latent_dim}")
+    print(f"Hidden Dim: {args.hidden_dim}")
     print(f"Num Episodes: {args.num_eval_episodes}")
     print(f"Device: {args.device}")
+    print(f"Use Transformer: {args.use_transformer}")
     print("="*80 + "\n")
     
     # Set random seed
@@ -500,21 +630,30 @@ def main():
         "eval/initial_accuracy": results['initial_accuracy'],
         "eval/final_accuracy": results['final_accuracy'],
         "eval/improvement": results['improvement'],
+        "eval/initial_variance": results['initial_variance'],
+        "eval/final_variance": results['final_variance'],
+        "eval/uncertainty_reduction": results['uncertainty_reduction'],
     })
     
-    # Log per-timestep accuracies as a table
+    # Log per-timestep accuracies and variances as a table
     timestep_table = wandb.Table(
-        columns=["timestep", "accuracy", "std"],
-        data=[[t, mean, std] for t, (mean, std) in enumerate(zip(results['mean_accuracies'], results['std_accuracies']))]
+        columns=["timestep", "accuracy", "accuracy_std", "variance", "variance_std"],
+        data=[[t, acc_mean, acc_std, var_mean, var_std] 
+              for t, (acc_mean, acc_std, var_mean, var_std) in enumerate(
+                  zip(results['mean_accuracies'], results['std_accuracies'],
+                      results['mean_variances'], results['std_variances']))]
     )
-    wandb.log({"eval/timestep_accuracies": timestep_table})
+    wandb.log({"eval/timestep_metrics": timestep_table})
     
     # Log adaptation curve as image
     wandb.log({"eval/adaptation_curve": wandb.Image(plot_path)})
     
-    # Log per-timestep accuracies as line plot
-    for t, mean in enumerate(results['mean_accuracies']):
-        wandb.log({"eval/accuracy_by_timestep": mean}, step=t)
+    # Log per-timestep accuracies and variances as line plots
+    for t, (acc, var) in enumerate(zip(results['mean_accuracies'], results['mean_variances'])):
+        wandb.log({
+            "eval/accuracy_by_timestep": acc,
+            "eval/variance_by_timestep": var
+        }, step=t)
     
     # Log improvement visualization
     fig, ax = plt.subplots(figsize=(6, 4))

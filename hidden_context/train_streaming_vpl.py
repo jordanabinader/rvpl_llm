@@ -105,6 +105,10 @@ class ScriptArguments:
         default=6.4,
         metadata={"help": "Free bits threshold for KL divergence (total across all dimensions)"}
     )
+    allow_kl_gradient_flow: bool = field(
+        default=False,
+        metadata={"help": "Allow gradients to flow through KL prior (enables smoother belief trajectories but less stable)"}
+    )
     # ---------------------------------------------
     
     # Training arguments
@@ -353,7 +357,8 @@ if __name__ == "__main__":
         beta_max=script_args.beta_max,
         beta_cycles=script_args.beta_cycles,
         temporal_gamma=script_args.temporal_gamma,
-        free_bits=script_args.free_bits
+        free_bits=script_args.free_bits,
+        allow_kl_gradient_flow=script_args.allow_kl_gradient_flow
     )
     
     # Add callback for first-step evaluation
@@ -382,5 +387,30 @@ if __name__ == "__main__":
     model_path = os.path.join(final_checkpoint_dir, "model.pt")
     model.save_model(model_path)
     
+    # Save model configuration for easy loading during evaluation
+    import json
+    config_path = os.path.join(final_checkpoint_dir, "config.json")
+    config = {
+        'seq_length': script_args.seq_length,
+        'latent_dim': script_args.latent_dim,
+        'hidden_dim': script_args.hidden_dim,
+        'encoder_embed_dim': script_args.encoder_embed_dim,
+        'decoder_embed_dim': script_args.decoder_embed_dim,
+        'use_transformer': script_args.use_transformer,
+        'num_attention_heads': script_args.num_attention_heads if script_args.use_transformer else None,
+        'num_transformer_layers': script_args.num_transformer_layers if script_args.use_transformer else None,
+        'transformer_dropout': script_args.transformer_dropout if script_args.use_transformer else None,
+        'beta_max': script_args.beta_max,
+        'beta_cycles': script_args.beta_cycles,
+        'temporal_gamma': script_args.temporal_gamma,
+        'free_bits': script_args.free_bits,
+        'allow_kl_gradient_flow': script_args.allow_kl_gradient_flow,
+        'seed': script_args.seed,
+        'output_dir': output_dir
+    }
+    with open(config_path, 'w') as f:
+        json.dump(config, f, indent=2)
+    
     print(f"Model saved to: {model_path}")
+    print(f"Config saved to: {config_path}")
     print("\nTraining complete!")

@@ -131,15 +131,28 @@ python -m hidden_context.train_streaming_vpl \
 
 echo ""
 echo "========================================="
-echo "Step 2: Evaluation (With Thompson Sampling)"
+echo "Step 2: Evaluation"
 echo "=========================================="
 
 # Re-enable W&B for evaluation (it logs separately)
 export WANDB_MODE=online
 
-# Find the actual model checkpoint (training creates nested directory structure)
+# Find the most recently modified model checkpoint with config.json
 echo "Searching for model checkpoint..."
-MODEL_PATH=$(find experiments/streaming_vpl_prism -name "model.pt" -path "*/final_checkpoint/*" -type f 2>/dev/null | grep -E "(${EXP_NAME}|both_seq${SEQ_LENGTH})" | tail -1)
+# First, try to find checkpoints that have both model.pt and config.json (newly trained models)
+MODEL_PATH=$(find experiments/streaming_vpl_prism -name "config.json" -path "*/final_checkpoint/*" -type f -mmin -60 2>/dev/null | head -1 | xargs -I {} dirname {} | xargs -I {} echo {}/model.pt)
+
+if [ -z "$MODEL_PATH" ] || [ ! -f "$MODEL_PATH" ]; then
+    # Fallback: search for any model.pt matching the sequence length from the last hour
+    echo "No recent checkpoint with config found, searching for any recent model..."
+    MODEL_PATH=$(find experiments/streaming_vpl_prism -name "model.pt" -path "*/final_checkpoint/*" -type f -mmin -60 2>/dev/null | grep "seq${SEQ_LENGTH}" | tail -1)
+fi
+
+if [ -z "$MODEL_PATH" ] || [ ! -f "$MODEL_PATH" ]; then
+    # Last fallback: just use the most recent model.pt
+    echo "Still no checkpoint found, using most recent model.pt..."
+    MODEL_PATH=$(find experiments/streaming_vpl_prism -name "model.pt" -path "*/final_checkpoint/*" -type f 2>/dev/null | xargs ls -t 2>/dev/null | head -1)
+fi
 
 if [ -z "$MODEL_PATH" ]; then
     echo "Error: Could not find model.pt for experiment"
@@ -156,14 +169,11 @@ echo "Found model at: $MODEL_PATH"
 EVAL_DIR=$(dirname $(dirname ${MODEL_PATH}))/evaluation
 echo "Evaluation results will be saved to: $EVAL_DIR"
 
+# Evaluation will auto-load model config from config.json
+# We pass minimal required args; config.json will provide the rest
 python -m hidden_context.evaluate_streaming_vpl \
     --model_path ${MODEL_PATH} \
     --data_path data_release/prism/gpt2 \
-    --seq_length ${SEQ_LENGTH} \
-    --latent_dim ${LATENT_DIM} \
-    --hidden_dim ${HIDDEN_DIM} \
-    --encoder_embed_dim 768 \
-    --decoder_embed_dim 768 \
     --num_eval_episodes 200 \
     --output_dir ${EVAL_DIR} \
     --seed ${SEED}

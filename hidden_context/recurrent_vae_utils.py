@@ -96,9 +96,10 @@ class RecurrentVPLEncoder(nn.Module):
         # - Narrower latent bottleneck (64) to force compression
         self.obs_dim = 256  # Increased from 64 to capture more detail
         
-        # Reuse PairEncoder logic but map to wider obs_dim
+        # Contrastive pair encoder: takes [chosen, rejected, interaction, difference]
+        # Input dim is 4 * embed_dim (for contrastive features)
         self.pair_encoder = nn.Sequential(
-            nn.Linear(2 * embed_dim, hidden_dim),
+            nn.Linear(4 * embed_dim, hidden_dim),  # Changed from 2 * embed_dim
             nn.LeakyReLU(0.2),
             nn.Linear(hidden_dim, self.obs_dim),  # Output wider feature
             nn.LeakyReLU(0.2)
@@ -127,7 +128,14 @@ class RecurrentVPLEncoder(nn.Module):
             h_curr: Current hidden state [batch, latent_dim]
             c_curr: Current cell state [batch, latent_dim]
         """
-        pair_embed = torch.cat([e_chosen, e_rejected], dim=-1)
+        # Contrastive Observation Encoder: Add interaction and difference terms
+        # This helps the model focus on what changed between options
+        pair_embed = torch.cat([
+            e_chosen,
+            e_rejected,
+            e_chosen * e_rejected,  # Interaction term
+            e_chosen - e_rejected   # Difference term (what distinguishes them)
+        ], dim=-1)
         # Step 1: Encode the comparison (observation)
         obs_feat = self.pair_encoder(pair_embed)  # [batch, obs_dim]
         
@@ -381,9 +389,9 @@ class TransformerVPLEncoder(nn.Module):
         self.latent_dim = latent_dim
         self.hidden_dim = hidden_dim
         
-        # Pair encoder: combines chosen and rejected embeddings
+        # Contrastive pair encoder: combines chosen, rejected, interaction, and difference
         self.pair_encoder = nn.Sequential(
-            nn.Linear(embed_dim * 2, hidden_dim),
+            nn.Linear(embed_dim * 4, hidden_dim),  # Changed from 2x to 4x for contrastive features
             nn.LayerNorm(hidden_dim),
             nn.ReLU(),
             nn.Dropout(dropout),
@@ -529,12 +537,18 @@ class TransformerVAEModel(nn.Module):
         batch_size, seq_len, embed_dim = embeddings_chosen.shape
         device = embeddings_chosen.device
         
-        # Encode all observation pairs first
+        # Encode all observation pairs first (with contrastive features)
         all_pairs = []
         for t in range(seq_len):
             e_chosen = embeddings_chosen[:, t, :]
             e_rejected = embeddings_rejected[:, t, :]
-            pair = torch.cat([e_chosen, e_rejected], dim=-1)  # [batch, 2*embed_dim]
+            # Contrastive encoding: [chosen, rejected, interaction, difference]
+            pair = torch.cat([
+                e_chosen, 
+                e_rejected, 
+                e_chosen * e_rejected,  # Interaction
+                e_chosen - e_rejected   # Difference
+            ], dim=-1)  # [batch, 4*embed_dim]
             pair_encoded = self.encoder.pair_encoder(pair)  # [batch, hidden_dim]
             all_pairs.append(pair_encoded)
         
@@ -614,6 +628,7 @@ class RecurrentVAETrainer(Trainer):
         beta_cycles: int = 4,
         temporal_gamma: float = 1.1, # Weight later timesteps more
         free_bits: float = 6.4, # Free bits threshold for KL divergence
+        allow_kl_gradient_flow: bool = False, # Allow gradients to flow through KL prior
         **kwargs
     ):
         super().__init__(*args, **kwargs)
@@ -622,6 +637,7 @@ class RecurrentVAETrainer(Trainer):
         self.latent_dim = latent_dim
         self.temporal_gamma = temporal_gamma
         self.free_bits = free_bits
+        self.allow_kl_gradient_flow = allow_kl_gradient_flow
         
         # Estimate total steps based on dataset size and batch size
         # This is an approximation; Trainer usually handles this but we need it for annealing
@@ -638,6 +654,7 @@ class RecurrentVAETrainer(Trainer):
         print(f"  Temporal Gamma: {temporal_gamma}")
         print(f"  Cyclical Annealing: Max Beta {beta_max}, Cycles {beta_cycles}")
         print(f"  Free Bits Threshold: {free_bits}")
+        print(f"  KL Gradient Flow: {allow_kl_gradient_flow}")
         print(f"  Total Steps: {total_steps}")
         print(f"  Steps per Cycle: {total_steps // beta_cycles}")
         print(f"  Initial Beta: {self.kl_annealer.get_beta():.6f}")
@@ -661,8 +678,22 @@ class RecurrentVAETrainer(Trainer):
         total_kl = 0.0
         num_valid_steps = 0  # Count non-padded steps
         
+<<<<<<< Updated upstream
         # KL annealer is stepped in on_step_end, not here
+=======
+        # Step annealer during training (on_step_end not reliably called)
+        if model.training and not return_outputs:
+            self.kl_annealer.step()
+            # Debug logging every 100 steps
+            if self.kl_annealer.current_step % 100 == 0:
+                print(f"[DEBUG RECURRENT] Annealer stepped to {self.kl_annealer.current_step}, model.training={model.training}, return_outputs={return_outputs}")
+        
+>>>>>>> Stashed changes
         beta = self.kl_annealer.get_beta()
+        
+        # Debug logging for beta value every 100 steps
+        if not return_outputs and hasattr(self, 'state') and self.state.global_step % 100 == 0:
+            print(f"[DEBUG RECURRENT] Step {self.state.global_step}: beta={beta:.6f}, annealer.current_step={self.kl_annealer.current_step}")
         
         if return_outputs:
             all_rewards_chosen, all_rewards_rejected = [], []
@@ -742,10 +773,16 @@ class RecurrentVAETrainer(Trainer):
             next_mu = torch.clamp(next_mu, -1, 1)
             next_logvar = torch.clamp(next_logvar, -1, 1)
             
-            # Fix #6: Keep detach on mu/logvar (KL prior), but NO detach on h_curr/c_curr
-            # This allows gradients to flow through the entire episode via LSTM states
-            prev_mu = curr_mu.detach()
-            prev_logvar = curr_logvar.detach()
+            # Fix #6: Optionally allow gradients through KL prior for smoother trajectories
+            # If allow_kl_gradient_flow=True, the model can optimize belief at t-1 
+            # to make it easier to transition to belief at t
+            # If False (default), treat previous belief as fixed target (more stable)
+            if self.allow_kl_gradient_flow:
+                prev_mu = curr_mu  # Allow gradients to flow back
+                prev_logvar = curr_logvar
+            else:
+                prev_mu = curr_mu.detach()  # Treat as fixed target
+                prev_logvar = curr_logvar.detach()
             # h_curr and c_curr flow naturally to next iteration (no detach!)
             
             # Set curr for next iteration
@@ -849,6 +886,7 @@ class TransformerVAETrainer(Trainer):
         beta_cycles: int = 4,
         temporal_gamma: float = 1.1,
         free_bits: float = 6.4,
+        allow_kl_gradient_flow: bool = False,
         **kwargs
     ):
         super().__init__(*args, **kwargs)
@@ -857,6 +895,7 @@ class TransformerVAETrainer(Trainer):
         self.latent_dim = latent_dim
         self.temporal_gamma = temporal_gamma
         self.free_bits = free_bits
+        self.allow_kl_gradient_flow = allow_kl_gradient_flow
         
         # Estimate total steps
         if self.args.max_steps > 0:
@@ -871,6 +910,7 @@ class TransformerVAETrainer(Trainer):
         print(f"  Temporal Gamma: {temporal_gamma}")
         print(f"  Cyclical Annealing: Max Beta {beta_max}, Cycles {beta_cycles}")
         print(f"  Free Bits Threshold: {free_bits}")
+        print(f"  KL Gradient Flow: {allow_kl_gradient_flow}")
         print(f"  Architecture: Self-Attention (Transformer)")
         print(f"  Total Steps: {total_steps}")
         print(f"  Steps per Cycle: {total_steps // beta_cycles}")
@@ -891,11 +931,17 @@ class TransformerVAETrainer(Trainer):
         device = embeddings_chosen.device
         
         # Encode all observation pairs (done once, reused for all timesteps)
+        # Use contrastive encoding: [chosen, rejected, interaction, difference]
         all_pairs = []
         for t in range(seq_len):
             e_chosen = embeddings_chosen[:, t, :]
             e_rejected = embeddings_rejected[:, t, :]
-            pair = torch.cat([e_chosen, e_rejected], dim=-1)
+            pair = torch.cat([
+                e_chosen, 
+                e_rejected, 
+                e_chosen * e_rejected,  # Interaction
+                e_chosen - e_rejected   # Difference
+            ], dim=-1)
             pair_encoded = model.encoder.pair_encoder(pair)
             all_pairs.append(pair_encoded)
         
@@ -913,8 +959,19 @@ class TransformerVAETrainer(Trainer):
         
         if model.training and not return_outputs:
             self.kl_annealer.step()
+<<<<<<< Updated upstream
         # KL annealer is stepped in on_step_end, not here
+=======
+            # Debug logging every 100 steps
+            if self.kl_annealer.current_step % 100 == 0:
+                print(f"[DEBUG TRANSFORMER] Annealer stepped to {self.kl_annealer.current_step}, model.training={model.training}, return_outputs={return_outputs}")
+        
+>>>>>>> Stashed changes
         beta = self.kl_annealer.get_beta()
+        
+        # Debug logging for beta value every 100 steps
+        if not return_outputs and hasattr(self, 'state') and self.state.global_step % 100 == 0:
+            print(f"[DEBUG TRANSFORMER] Step {self.state.global_step}: beta={beta:.6f}, annealer.current_step={self.kl_annealer.current_step}")
         
         if return_outputs:
             all_rewards_chosen = []
@@ -988,8 +1045,13 @@ class TransformerVAETrainer(Trainer):
                 num_valid_steps += 1
             
             # Update previous belief for next iteration
-            prev_mu = curr_mu.detach()
-            prev_logvar = curr_logvar.detach()
+            # Optionally allow gradients to flow back through KL prior
+            if self.allow_kl_gradient_flow:
+                prev_mu = curr_mu  # Allow gradients
+                prev_logvar = curr_logvar
+            else:
+                prev_mu = curr_mu.detach()  # Fixed target (default)
+                prev_logvar = curr_logvar.detach()
             
             if return_outputs:
                 all_rewards_chosen.append(r_chosen.detach())
