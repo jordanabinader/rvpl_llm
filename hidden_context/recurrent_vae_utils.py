@@ -638,6 +638,9 @@ class RecurrentVAETrainer(Trainer):
         print(f"  Temporal Gamma: {temporal_gamma}")
         print(f"  Cyclical Annealing: Max Beta {beta_max}, Cycles {beta_cycles}")
         print(f"  Free Bits Threshold: {free_bits}")
+        print(f"  Total Steps: {total_steps}")
+        print(f"  Steps per Cycle: {total_steps // beta_cycles}")
+        print(f"  Initial Beta: {self.kl_annealer.get_beta():.6f}")
     
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         embeddings_chosen = inputs['embeddings_chosen']
@@ -790,6 +793,10 @@ class RecurrentVAETrainer(Trainer):
     
     def on_step_end(self, args, state, control, **kwargs):
         self.kl_annealer.step()
+        # Log beta every 100 steps for debugging
+        if state.global_step % 100 == 0:
+            current_beta = self.kl_annealer.get_beta()
+            print(f"Step {state.global_step}: beta = {current_beta:.6f}, annealer.current_step = {self.kl_annealer.current_step}")
         return super().on_step_end(args, state, control, **kwargs)
 
     @classmethod
@@ -865,6 +872,9 @@ class TransformerVAETrainer(Trainer):
         print(f"  Cyclical Annealing: Max Beta {beta_max}, Cycles {beta_cycles}")
         print(f"  Free Bits Threshold: {free_bits}")
         print(f"  Architecture: Self-Attention (Transformer)")
+        print(f"  Total Steps: {total_steps}")
+        print(f"  Steps per Cycle: {total_steps // beta_cycles}")
+        print(f"  Initial Beta: {self.kl_annealer.get_beta():.6f}")
     
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         """
@@ -1022,6 +1032,10 @@ class TransformerVAETrainer(Trainer):
     def on_step_end(self, args, state, control, **kwargs):
         """Update KL annealer (reuse from RecurrentVAETrainer)."""
         self.kl_annealer.step()
+        # Log beta every 100 steps for debugging
+        if state.global_step % 100 == 0:
+            current_beta = self.kl_annealer.get_beta()
+            print(f"Step {state.global_step}: beta = {current_beta:.6f}, annealer.current_step = {self.kl_annealer.current_step}")
         return super().on_step_end(args, state, control, **kwargs)
     
     @classmethod
