@@ -45,20 +45,20 @@ export PYTHONNOUSERSITE=1
 python -m pip install --upgrade pip
 
 # 6. Install packages
-echo "Installing dependencies..."
-python -m pip install --upgrade --ignore-installed --no-cache-dir \
-    "torch>=2.0" \
-    "transformers==4.40.0" \
-    "tokenizers==0.19.1" \
-    "peft==0.10.0" \
-    "accelerate>=0.27.0" \
-    "numpy" \
-    "sentencepiece" \
-    "datasets" \
-    "wandb" \
-    "matplotlib" \
-    "scipy" \
-    "scikit-learn" 
+# echo "Installing dependencies..."
+# python -m pip install --upgrade --ignore-installed --no-cache-dir \
+#     "torch>=2.0" \
+#     "transformers==4.40.0" \
+#     "tokenizers==0.19.1" \
+#     "peft==0.10.0" \
+#     "accelerate>=0.27.0" \
+#     "numpy" \
+#     "sentencepiece" \
+#     "datasets" \
+#     "wandb" \
+#     "matplotlib" \
+#     "scipy" \
+#     "scikit-learn" 
 
 echo "Node: $(hostname)"
 echo "GPUs visible to this job:"

@@ -16,20 +16,6 @@
 # Environment setup     #
 #########################
 
-<<<<<<< Updated upstream
-# Create logs directory
-mkdir -p logs
-export WANDB_MODE=disabled
-
-# 1. Load the base system python
-module load miniforge
-
-# 2. Create the virtual environment (if it doesn't exist)
-# We use 'venv' (standard spelling), not 'vnev'
-if [ ! -d "venv" ]; then
-    echo "Creating virtual environment..."
-    python -m venv venv
-=======
 # W&B Configuration
 export WANDB_MODE=online
 export WANDB_PROJECT="streaming-vpl-prism"
@@ -38,7 +24,6 @@ export WANDB_PROJECT="streaming-vpl-prism"
 if [ -z "$VIRTUAL_ENV" ]; then
     echo "Activating virtual environment..."
     source vnev/bin/activate
->>>>>>> Stashed changes
 fi
 
 # 3. Activate the environment (Fixing the typo here: vnev -> venv)
