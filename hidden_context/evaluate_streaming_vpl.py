@@ -64,6 +64,10 @@ class EvalArguments:
         metadata={"help": "Number of episodes to evaluate on"}
     )
     batch_size: int = field(default=16)
+    use_mean: bool = field(
+        default=False,
+        metadata={"help": "Use mean (mu) instead of sampling during eval"}
+    )
     
     # Output arguments
     output_dir: str = field(
@@ -83,7 +87,8 @@ def evaluate_adaptation(
     model: RecurrentVAEModel,
     dataloader: DataLoader,
     device: str,
-    seq_length: int
+    seq_length: int,
+    use_mean: bool = False
 ) -> dict:
     """
     Evaluate model and track per-timestep accuracy.
@@ -93,6 +98,7 @@ def evaluate_adaptation(
         dataloader: DataLoader for test episodes
         device: Device to run on
         seq_length: Length of sequences
+        use_mean: If True, use mean (mu) instead of sampling (z ~ q(z|...))
     
     Returns:
         Dictionary with evaluation results
@@ -152,10 +158,13 @@ def evaluate_adaptation(
                         # Attend to observations 0 to t-1 (not including t)
                         mu, logvar = model.encoder(sequence_pairs[:, :t, :], current_timestep=t-1)
                     
-                    # Sample z from belief (Thompson sampling)
-                    std = torch.exp(0.5 * logvar)
-                    eps = torch.randn_like(std)
-                    z = mu + std * eps
+                    # Sample z from belief (Thompson sampling) or use mean
+                    if use_mean:
+                        z = mu
+                    else:
+                        std = torch.exp(0.5 * logvar)
+                        eps = torch.randn_like(std)
+                        z = mu + std * eps
                     
                     # Get observation t (which belief hasn't seen yet)
                     e_chosen = embeddings_chosen[:, t, :]
@@ -164,13 +173,14 @@ def evaluate_adaptation(
                     # Predict on observation t
                     r_chosen, r_rejected = model.decoder(e_chosen, e_rejected, z)
                     
-                    # Compute accuracy (only for non-padded samples)
-                    correct = (r_chosen > r_rejected).float()
+                    # Compute accuracy (exclude padded samples entirely)
+                    correct = (r_chosen > r_rejected).float().squeeze(-1)  # [batch]
                     if mask is not None:
-                        correct = correct * step_mask.float().unsqueeze(-1)
-                        accuracies_per_timestep[t].append(correct.cpu())
-                    else:
-                        accuracies_per_timestep[t].append(correct.cpu())
+                        valid = step_mask.bool()  # [batch]
+                        correct = correct[valid]  # keep only real timesteps
+                        r_chosen = r_chosen[valid]
+                        r_rejected = r_rejected[valid]
+                    accuracies_per_timestep[t].append(correct.cpu())
                     all_rewards_chosen[t].append(r_chosen.cpu())
                     all_rewards_rejected[t].append(r_rejected.cpu())
             else:
@@ -191,10 +201,13 @@ def evaluate_adaptation(
                     # KEY FIX: At timestep t, use belief from observations 0...t-1
                     # (mu, logvar already set from previous iteration, or prior for t=0)
                     
-                    # Thompson Sampling from current belief
-                    std = torch.exp(0.5 * logvar)
-                    eps = torch.randn_like(std)
-                    z = mu + std * eps
+                    # Thompson Sampling from current belief or use mean
+                    if use_mean:
+                        z = mu
+                    else:
+                        std = torch.exp(0.5 * logvar)
+                        eps = torch.randn_like(std)
+                        z = mu + std * eps
                     
                     # Get observation t (which belief hasn't seen yet)
                     e_chosen = embeddings_chosen[:, t, :]
@@ -203,15 +216,19 @@ def evaluate_adaptation(
                     # Predict on observation t
                     r_chosen, r_rejected = model.decoder(e_chosen, e_rejected, z)
                     
-                    # Compute accuracy (only for non-padded samples)
-                    correct = (r_chosen > r_rejected).float()
+                    # Compute accuracy (exclude padded samples entirely)
+                    correct = (r_chosen > r_rejected).float().squeeze(-1)  # [batch]
                     if mask is not None:
-                        correct = correct * step_mask.float().unsqueeze(-1)
-                        accuracies_per_timestep[t].append(correct.cpu())
+                        valid = step_mask.bool()  # [batch]
+                        correct = correct[valid]  # keep only real timesteps
+                        r_chosen_store = r_chosen[valid]
+                        r_rejected_store = r_rejected[valid]
                     else:
-                        accuracies_per_timestep[t].append(correct.cpu())
-                    all_rewards_chosen[t].append(r_chosen.cpu())
-                    all_rewards_rejected[t].append(r_rejected.cpu())
+                        r_chosen_store = r_chosen
+                        r_rejected_store = r_rejected
+                    accuracies_per_timestep[t].append(correct.cpu())
+                    all_rewards_chosen[t].append(r_chosen_store.cpu())
+                    all_rewards_rejected[t].append(r_rejected_store.cpu())
                     
                     # Now update belief with observation t for next iteration
                     mu, logvar, h_curr, c_curr = model.encoder(e_chosen, e_rejected, h_curr, c_curr)
@@ -219,11 +236,18 @@ def evaluate_adaptation(
     # Aggregate results
     mean_accuracies = []
     std_accuracies = []
+    valid_counts = []
     
     for t in range(seq_length):
         accs = torch.cat(accuracies_per_timestep[t])
+        valid_counts.append(accs.numel())
         mean_accuracies.append(accs.mean().item())
         std_accuracies.append(accs.std().item())
+    
+    # Print valid sample counts per timestep for debugging
+    print("\nValid samples per timestep:")
+    for t in range(seq_length):
+        print(f"  t={t}: {valid_counts[t]} samples, accuracy={mean_accuracies[t]:.2%}")
     
     # Compute overall statistics
     overall_accuracy = np.mean(mean_accuracies)
@@ -418,11 +442,16 @@ def main():
     
     # Evaluate
     print("\nEvaluating adaptation...")
+    if args.use_mean:
+        print("Using mean (mu) for predictions (no sampling)")
+    else:
+        print("Using Thompson sampling (sampling from posterior)")
     results = evaluate_adaptation(
         model=model,
         dataloader=test_loader,
         device=args.device,
-        seq_length=args.seq_length
+        seq_length=args.seq_length,
+        use_mean=args.use_mean
     )
     
     # Print results
