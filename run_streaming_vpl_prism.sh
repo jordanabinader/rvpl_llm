@@ -1,18 +1,79 @@
 #!/bin/bash
 
-# Train Streaming VPL on PRISM alignment dataset
-# This uses real user conversations with natural sequential interactions
+#########################
+# Slurm job parameters  #
+#########################
 
-echo "========================================="
-echo "Streaming VPL Training on PRISM Dataset"
-echo "========================================="
-echo ""
+#SBATCH -J streaming_vpl_prism             # Job name
+#SBATCH -p mit_normal_gpu                   # GPU partition
+#SBATCH -c 4                                # CPU cores
+#SBATCH --mem=32G                           # Memory
+#SBATCH -t 2:00:00                         # Time limit
+#SBATCH -G 1                                # 1 GPU
+#SBATCH -o logs/streaming_vpl_prism_%j.out # STDOUT log
+#SBATCH -e logs/streaming_vpl_prism_%j.err # STDERR log
+#########################
+# Environment setup     #
+#########################
 
-# Check if virtual environment is activated
-if [ -z "$VIRTUAL_ENV" ]; then
-    echo "Activating virtual environment..."
-    source vnev/bin/activate
+# Create logs directory
+mkdir -p logs
+export WANDB_MODE=disabled
+
+# 1. Load the base system python
+module load miniforge
+
+# 2. Create the virtual environment (if it doesn't exist)
+# We use 'venv' (standard spelling), not 'vnev'
+if [ ! -d "venv" ]; then
+    echo "Creating virtual environment..."
+    python -m venv venv
 fi
+
+# 3. Activate the environment (Fixing the typo here: vnev -> venv)
+source venv/bin/activate
+
+# 4. CRITICAL: Ensure we rely ONLY on this venv, ignoring local user packages
+export PYTHONNOUSERSITE=1
+
+# 5. Upgrade pip inside the virtual environment
+# python -m pip install --upgrade pip
+
+# 6. Install packages
+# NOTE: We REMOVED 'pip uninstall'. You cannot uninstall system packages.
+# Instead, we use --ignore-installed to force installing a fresh copy 
+# into your local venv, shadowing the system version.
+
+# echo "Installing dependencies..."
+# python -m pip install --upgrade --ignore-installed --no-cache-dir \
+#     "torch>=2.0" \
+#     "transformers==4.40.0" \
+#     "tokenizers==0.19.1" \
+#     "peft==0.10.0" \
+#     "accelerate>=0.27.0" \
+#     "numpy" \
+#     "sentencepiece" \
+#     "datasets" \
+#     "wandb" \
+#     "matplotlib" \
+#     "scipy" \
+#     "scikit-learn" 
+
+echo "Node: $(hostname)"
+echo "GPUs visible to this job:"
+nvidia-smi || echo "nvidia-smi not found"
+
+# Verify versions
+echo "Package versions in venv:"
+python -c "import transformers; print(f'transformers: {transformers.__version__}')"
+python -c "import peft; print(f'peft: {peft.__version__}')"
+python -c "import tokenizers; print(f'tokenizers: {tokenizers.__version__}')"
+python -c "import accelerate; print(f'accelerate: {accelerate.__version__}')"
+
+
+#########################
+# Training              #
+#########################
 
 # Configuration
 DATA_PATH="data_release/prism/gpt2"

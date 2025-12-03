@@ -1,0 +1,22 @@
+=========================================
+Streaming VPL Training on PRISM Dataset
+=========================================
+
+Activating virtual environment...
+Configuration:
+  Data Path: data_release/prism/gpt2
+  Sequence Length: 10
+  Latent Dimension: 512
+  Beta: 0.1
+  Seed: 0
+  Output: experiments/streaming_vpl_prism/prism_seq10_latent512_beta0.1_seed0
+
+/var/spool/slurmd/job6825068/slurm_script: line 48: python: command not found
+
+=========================================
+Training Complete!
+=========================================
+Results saved to: experiments/streaming_vpl_prism/prism_seq10_latent512_beta0.1_seed0
+
+To evaluate, run:
+  python -m hidden_context.evaluate_streaming_vpl --checkpoint_dir experiments/streaming_vpl_prism/prism_seq10_latent512_beta0.1_seed0/final_checkpoint
