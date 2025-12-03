@@ -61,7 +61,7 @@ class SequentialPRISMDataset(Dataset):
         self.seq_length = seq_length
         self.epoch_size = epoch_size
         self.seed = seed
-        self.min_interactions_per_user = min_interactions_per_user or seq_length
+        self.min_interactions_per_user = min_interactions_per_user or 1
         self.use_hard_negatives = use_hard_negatives
         self.hard_negative_ratio = hard_negative_ratio
         self.rating_threshold = rating_threshold
@@ -188,44 +188,52 @@ class SequentialPRISMDataset(Dataset):
     
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         """
-        Sample one episode (sequence of T interactions from same user).
+        Sample one episode (sequence of up to T interactions from same user).
+        Supports variable-length sequences with masking.
         
         Returns:
             Dictionary with:
-                - embeddings_chosen: [T, embed_dim]
-                - embeddings_rejected: [T, embed_dim]
-                - labels: [T] (all 1s since chosen > rejected by definition)
+                - embeddings_chosen: list of embeddings (will be padded in collate_fn)
+                - embeddings_rejected: list of embeddings (will be padded in collate_fn)
+                - labels: list (all 1s since chosen > rejected by definition)
                 - user_id: string identifier
-                - turn_numbers: [T] (turn indices if available)
+                - turn_numbers: list (turn indices if available)
+                - actual_length: int (actual number of interactions, ≤T)
+                - mask: list of 0/1 (1 for real data, 0 for padding)
         """
         # Randomly select user from available users
         user_id = random.choice(self.available_users)
         
         # Get user's interaction pool
         pool = self.user_pools[user_id]
+        actual_length = len(pool)
         
-        # Sample T interactions
-        if self.use_turn_order and len(pool) >= self.seq_length:
-            # Sample a random starting point and take consecutive interactions
-            max_start = len(pool) - self.seq_length
-            start_idx = random.randint(0, max_start)
-            episode_items = pool[start_idx:start_idx + self.seq_length]
-        elif self.use_hard_negatives and 'difficulty' in pool[0]:
-            # Weighted sampling based on difficulty
-            difficulties = np.array([item['difficulty'] for item in pool])
-            weights = difficulties + 0.01
-            weights = weights / weights.sum()
-            
-            indices = np.random.choice(
-                len(pool),
-                size=min(self.seq_length, len(pool)),
-                replace=False,
-                p=weights
-            )
-            episode_items = [pool[i] for i in indices]
+        # Sample interactions based on what's available
+        if actual_length >= self.seq_length:
+            # User has enough interactions - sample seq_length of them
+            if self.use_turn_order:
+                max_start = actual_length - self.seq_length
+                start_idx = random.randint(0, max_start)
+                episode_items = pool[start_idx:start_idx + self.seq_length]
+            elif self.use_hard_negatives and 'difficulty' in pool[0]:
+                difficulties = np.array([item['difficulty'] for item in pool])
+                weights = difficulties + 0.01
+                weights = weights / weights.sum()
+                indices = np.random.choice(
+                    actual_length,
+                    size=self.seq_length,
+                    replace=False,
+                    p=weights
+                )
+                episode_items = [pool[i] for i in indices]
+            else:
+                episode_items = random.sample(pool, self.seq_length)
+            actual_seq_length = self.seq_length
         else:
-            # Standard random sampling
-            episode_items = random.sample(pool, min(self.seq_length, len(pool)))
+            # User has fewer than seq_length interactions - use all of them
+            # No padding here, will be done in collate_fn
+            episode_items = pool
+            actual_seq_length = actual_length
         
         # Extract embeddings and metadata
         embeddings_chosen = []
@@ -234,7 +242,6 @@ class SequentialPRISMDataset(Dataset):
         turn_numbers = []
         
         for item in episode_items:
-            # Get pre-computed embeddings
             embed_chosen = item['embeddings']['embedding_chosen']
             embed_rejected = item['embeddings']['embedding_rejected']
             
@@ -243,47 +250,66 @@ class SequentialPRISMDataset(Dataset):
             labels.append(1)  # Chosen is always preferred
             turn_numbers.append(item.get('turn_number', 0))
         
+        # Create mask: 1 for real data, 0 for padding
+        mask = [1] * actual_seq_length + [0] * (self.seq_length - actual_seq_length)
+        
         return {
             'embeddings_chosen': embeddings_chosen,
             'embeddings_rejected': embeddings_rejected,
             'labels': labels,
             'user_id': user_id,
-            'turn_numbers': turn_numbers
+            'turn_numbers': turn_numbers,
+            'actual_length': actual_seq_length,
+            'mask': mask
         }
 
 
 def sequential_prism_collate_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
     """
-    Collate function to batch multiple episodes.
+    Collate function to batch multiple episodes with variable lengths.
+    Handles padding for shorter sequences.
     
     Args:
         batch: List of episodes from __getitem__
         
     Returns:
         Dictionary with batched tensors:
-            - embeddings_chosen: [batch_size, seq_len, embed_dim]
-            - embeddings_rejected: [batch_size, seq_len, embed_dim]
-            - labels: [batch_size, seq_len]
+            - embeddings_chosen: [batch_size, max_seq_len, embed_dim] (padded)
+            - embeddings_rejected: [batch_size, max_seq_len, embed_dim] (padded)
+            - labels: [batch_size, max_seq_len] (padded with 0s)
             - user_ids: List of user_id strings
-            - turn_numbers: [batch_size, seq_len]
+            - turn_numbers: [batch_size, max_seq_len] (padded with 0s)
+            - mask: [batch_size, max_seq_len] (1 for real data, 0 for padding)
+            - actual_lengths: [batch_size] (actual sequence lengths)
     """
     batch_size = len(batch)
-    seq_len = len(batch[0]['embeddings_chosen'])
+    
+    # Get max sequence length (from mask)
+    max_seq_len = len(batch[0]['mask'])
+    
+    # Get embedding dimension from first real embedding
     embed_dim = len(batch[0]['embeddings_chosen'][0])
     
-    # Initialize tensors
-    embeddings_chosen = torch.zeros(batch_size, seq_len, embed_dim)
-    embeddings_rejected = torch.zeros(batch_size, seq_len, embed_dim)
-    labels = torch.zeros(batch_size, seq_len, dtype=torch.long)
-    turn_numbers = torch.zeros(batch_size, seq_len, dtype=torch.long)
+    # Initialize tensors with zeros (padding)
+    embeddings_chosen = torch.zeros(batch_size, max_seq_len, embed_dim)
+    embeddings_rejected = torch.zeros(batch_size, max_seq_len, embed_dim)
+    labels = torch.zeros(batch_size, max_seq_len, dtype=torch.long)
+    turn_numbers = torch.zeros(batch_size, max_seq_len, dtype=torch.long)
+    mask = torch.zeros(batch_size, max_seq_len, dtype=torch.bool)
+    actual_lengths = torch.zeros(batch_size, dtype=torch.long)
     user_ids = []
     
-    # Fill tensors
+    # Fill tensors with actual data
     for i, episode in enumerate(batch):
-        embeddings_chosen[i] = torch.tensor(episode['embeddings_chosen'])
-        embeddings_rejected[i] = torch.tensor(episode['embeddings_rejected'])
-        labels[i] = torch.tensor(episode['labels'])
-        turn_numbers[i] = torch.tensor(episode['turn_numbers'])
+        actual_len = episode['actual_length']
+        actual_lengths[i] = actual_len
+        
+        # Only fill up to actual_length
+        embeddings_chosen[i, :actual_len] = torch.tensor(episode['embeddings_chosen'])
+        embeddings_rejected[i, :actual_len] = torch.tensor(episode['embeddings_rejected'])
+        labels[i, :actual_len] = torch.tensor(episode['labels'])
+        turn_numbers[i, :actual_len] = torch.tensor(episode['turn_numbers'])
+        mask[i] = torch.tensor(episode['mask'], dtype=torch.bool)
         user_ids.append(episode['user_id'])
     
     return {
@@ -291,6 +317,8 @@ def sequential_prism_collate_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
         'embeddings_rejected': embeddings_rejected,
         'labels': labels,
         'user_ids': user_ids,
-        'turn_numbers': turn_numbers
+        'turn_numbers': turn_numbers,
+        'mask': mask,
+        'actual_lengths': actual_lengths
     }
 

@@ -110,6 +110,9 @@ def evaluate_adaptation(
             # Move batch to device
             embeddings_chosen = batch['embeddings_chosen'].to(device)
             embeddings_rejected = batch['embeddings_rejected'].to(device)
+            mask = batch.get('mask', None)  # Get mask if available
+            if mask is not None:
+                mask = mask.to(device)
             
             # Handle both user_type (HH-RLHF, Pets) and user_ids (PRISM)
             if 'user_type' in batch:
@@ -134,6 +137,12 @@ def evaluate_adaptation(
                 
                 # Process each timestep with attention
                 for t in range(seq_length):
+                    # Skip if all samples are padded at this timestep
+                    if mask is not None:
+                        step_mask = mask[:, t]
+                        if not step_mask.any():
+                            continue
+                    
                     e_chosen = embeddings_chosen[:, t, :]
                     e_rejected = embeddings_rejected[:, t, :]
                     
@@ -148,9 +157,13 @@ def evaluate_adaptation(
                     # Predict rewards
                     r_chosen, r_rejected = model.decoder(e_chosen, e_rejected, z)
                     
-                    # Compute accuracy
+                    # Compute accuracy (only for non-padded samples)
                     correct = (r_chosen > r_rejected).float()
-                    accuracies_per_timestep[t].append(correct.cpu())
+                    if mask is not None:
+                        correct = correct * step_mask.float().unsqueeze(-1)
+                        accuracies_per_timestep[t].append(correct.cpu())
+                    else:
+                        accuracies_per_timestep[t].append(correct.cpu())
                     all_rewards_chosen[t].append(r_chosen.cpu())
                     all_rewards_rejected[t].append(r_rejected.cpu())
             else:
@@ -160,6 +173,12 @@ def evaluate_adaptation(
                 
                 # Process sequence timestep by timestep
                 for t in range(seq_length):
+                    # Skip if all samples are padded at this timestep
+                    if mask is not None:
+                        step_mask = mask[:, t]
+                        if not step_mask.any():
+                            continue
+                    
                     e_chosen = embeddings_chosen[:, t, :]
                     e_rejected = embeddings_rejected[:, t, :]
                     
@@ -174,9 +193,13 @@ def evaluate_adaptation(
                     # Predict rewards
                     r_chosen, r_rejected = model.decoder(e_chosen, e_rejected, z)
                     
-                    # Compute accuracy
+                    # Compute accuracy (only for non-padded samples)
                     correct = (r_chosen > r_rejected).float()
-                    accuracies_per_timestep[t].append(correct.cpu())
+                    if mask is not None:
+                        correct = correct * step_mask.float().unsqueeze(-1)
+                        accuracies_per_timestep[t].append(correct.cpu())
+                    else:
+                        accuracies_per_timestep[t].append(correct.cpu())
                     all_rewards_chosen[t].append(r_chosen.cpu())
                     all_rewards_rejected[t].append(r_rejected.cpu())
     

@@ -629,6 +629,7 @@ class RecurrentVAETrainer(Trainer):
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         embeddings_chosen = inputs['embeddings_chosen']
         embeddings_rejected = inputs['embeddings_rejected']
+        mask = inputs.get('mask', None)  # Get mask if available
         
         batch_size, seq_len, embed_dim = embeddings_chosen.shape
         device = embeddings_chosen.device
@@ -642,6 +643,7 @@ class RecurrentVAETrainer(Trainer):
         total_loss = 0.0
         total_recon = 0.0
         total_kl = 0.0
+        num_valid_steps = 0  # Count non-padded steps
         
         if self.model.training and not return_outputs:
             self.kl_annealer.step()
@@ -653,6 +655,18 @@ class RecurrentVAETrainer(Trainer):
             all_mu, all_logvar = [], []
         
         for t in range(seq_len):
+            # Check if this timestep is valid (not padded)
+            if mask is not None:
+                step_mask = mask[:, t]  # [batch_size]
+                if not step_mask.any():
+                    # All samples in batch are padded at this timestep
+                    if return_outputs:
+                        # Still need to append something for consistency
+                        all_rewards_chosen.append(torch.zeros(batch_size, 1).to(device))
+                        all_rewards_rejected.append(torch.zeros(batch_size, 1).to(device))
+                        all_mu.append(torch.zeros(batch_size, self.latent_dim).to(device))
+                        all_logvar.append(torch.zeros(batch_size, self.latent_dim).to(device))
+                    continue
             e_chosen = embeddings_chosen[:, t, :]
             e_rejected = embeddings_rejected[:, t, :]
             
@@ -670,10 +684,17 @@ class RecurrentVAETrainer(Trainer):
             # Decoder
             r_chosen, r_rejected = model.decoder(e_chosen, e_rejected, z)
             
-            # Losses
+            # Losses with masking
             # 1. Capped Temporal Weighting (Fix #5): Prevent weight explosion
             time_weight = min(1.0 + (0.1 * t), 2.0)  # Max 2x weight
-            recon_loss = -F.logsigmoid(r_chosen - r_rejected).mean()
+            
+            # Apply mask to reconstruction loss if available
+            if mask is not None:
+                step_mask = mask[:, t].float().unsqueeze(-1)  # [batch_size, 1]
+                recon_loss_per_sample = -F.logsigmoid(r_chosen - r_rejected) * step_mask
+                recon_loss = recon_loss_per_sample.sum() / (step_mask.sum() + 1e-8)
+            else:
+                recon_loss = -F.logsigmoid(r_chosen - r_rejected).mean()
             
             # 2. KL Divergence
             if t == 0:
@@ -689,12 +710,13 @@ class RecurrentVAETrainer(Trainer):
             # but we add it back to the metric so we see the real KL
             kl_term = beta * (kl_loss_clipped - kl_threshold) 
 
-            # Step Loss
-            step_loss = (time_weight * recon_loss) + kl_term
-            
-            total_loss += step_loss
-            total_recon += recon_loss
-            total_kl += kl_loss
+            # Step Loss (only add if this timestep is valid)
+            if mask is None or step_mask.any():
+                step_loss = (time_weight * recon_loss) + kl_term
+                total_loss += step_loss
+                total_recon += recon_loss
+                total_kl += kl_loss
+                num_valid_steps += 1
             
             # Fix #6: Keep detach on mu/logvar (KL prior), but NO detach on h_curr/c_curr
             # This allows gradients to flow through the entire episode via LSTM states
@@ -708,10 +730,11 @@ class RecurrentVAETrainer(Trainer):
                 all_mu.append(curr_mu.detach())
                 all_logvar.append(curr_logvar.detach())
         
-        # Normalize loss
-        total_loss = total_loss / seq_len
-        avg_recon = total_recon / seq_len
-        avg_kl = total_kl / seq_len
+        # Normalize loss by number of valid (non-padded) steps
+        norm_factor = num_valid_steps if num_valid_steps > 0 else seq_len
+        total_loss = total_loss / norm_factor
+        avg_recon = total_recon / norm_factor
+        avg_kl = total_kl / norm_factor
         
         if not return_outputs and self.state.global_step % 10 == 0:
             self.log({
@@ -827,6 +850,7 @@ class TransformerVAETrainer(Trainer):
         """
         embeddings_chosen = inputs['embeddings_chosen']
         embeddings_rejected = inputs['embeddings_rejected']
+        mask = inputs.get('mask', None)  # Get mask if available
         
         batch_size, seq_len, embed_dim = embeddings_chosen.shape
         device = embeddings_chosen.device
@@ -849,6 +873,7 @@ class TransformerVAETrainer(Trainer):
         total_loss = 0.0
         total_recon = 0.0
         total_kl = 0.0
+        num_valid_steps = 0  # Count non-padded steps
         
         if model.training and not return_outputs:
             self.kl_annealer.step()
@@ -863,6 +888,17 @@ class TransformerVAETrainer(Trainer):
         
         # Process each timestep
         for t in range(seq_len):
+            # Check if this timestep is valid (not padded)
+            if mask is not None:
+                step_mask = mask[:, t]  # [batch_size]
+                if not step_mask.any():
+                    # All samples in batch are padded at this timestep
+                    if return_outputs:
+                        all_rewards_chosen.append(torch.zeros(batch_size, 1).to(device))
+                        all_rewards_rejected.append(torch.zeros(batch_size, 1).to(device))
+                        all_mu.append(torch.zeros(batch_size, self.latent_dim).to(device))
+                        all_logvar.append(torch.zeros(batch_size, self.latent_dim).to(device))
+                    continue
             e_chosen = embeddings_chosen[:, t, :]
             e_rejected = embeddings_rejected[:, t, :]
             
@@ -875,8 +911,13 @@ class TransformerVAETrainer(Trainer):
             # Decode
             r_chosen, r_rejected = model.decoder(e_chosen, e_rejected, z)
             
-            # Reconstruction loss (BTL)
-            recon_loss = -F.logsigmoid(r_chosen - r_rejected).mean()
+            # Reconstruction loss (BTL) with masking
+            if mask is not None:
+                step_mask = mask[:, t].float().unsqueeze(-1)  # [batch_size, 1]
+                recon_loss_per_sample = -F.logsigmoid(r_chosen - r_rejected) * step_mask
+                recon_loss = recon_loss_per_sample.sum() / (step_mask.sum() + 1e-8)
+            else:
+                recon_loss = -F.logsigmoid(r_chosen - r_rejected).mean()
             
             # KL divergence with free bits
             if t == 0:
@@ -892,10 +933,12 @@ class TransformerVAETrainer(Trainer):
             # Temporal weighting
             weight = self.temporal_gamma ** t
             
-            # Weighted loss for this timestep
-            total_loss += weight * (recon_loss + beta * kl_loss)
-            total_recon += weight * recon_loss
-            total_kl += weight * kl_loss
+            # Weighted loss for this timestep (only add if valid)
+            if mask is None or step_mask.any():
+                total_loss += weight * (recon_loss + beta * kl_loss)
+                total_recon += weight * recon_loss
+                total_kl += weight * kl_loss
+                num_valid_steps += 1
             
             # Update previous belief for next iteration
             prev_mu = curr_mu.detach()
@@ -907,8 +950,9 @@ class TransformerVAETrainer(Trainer):
                 all_mu.append(curr_mu.detach())
                 all_logvar.append(curr_logvar.detach())
         
-        # Normalize by sum of weights
-        weight_sum = sum(self.temporal_gamma ** t for t in range(seq_len))
+        # Normalize by sum of weights (only for valid steps)
+        norm_factor = num_valid_steps if num_valid_steps > 0 else seq_len
+        weight_sum = sum(self.temporal_gamma ** t for t in range(norm_factor))
         total_loss = total_loss / weight_sum
         avg_recon = total_recon / weight_sum
         avg_kl = total_kl / weight_sum
