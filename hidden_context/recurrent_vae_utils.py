@@ -223,6 +223,8 @@ class RecurrentVAEModel(nn.Module):
         # Initialize LSTM hidden and cell states
         h_curr = torch.zeros(batch_size, self.latent_dim).to(device)
         c_curr = torch.zeros(batch_size, self.latent_dim).to(device)
+        mu = torch.zeros(batch_size, self.latent_dim).to(device)
+        logvar = torch.zeros(batch_size, self.latent_dim).to(device)
         
         # Storage for trajectories
         if return_trajectories:
@@ -234,19 +236,20 @@ class RecurrentVAEModel(nn.Module):
         
         # Process sequence
         for t in range(seq_len):
-            e_chosen = embeddings_chosen[:, t, :]
-            e_rejected = embeddings_rejected[:, t, :]
+            # KEY FIX: At timestep t, use belief from observations 0...t-1
+            # (mu, logvar already set from previous iteration, or prior for t=0)
             
-            # Update belief
-            mu, logvar, h_curr, c_curr = self.encoder(e_chosen, e_rejected, h_curr, c_curr)
-            
-            # Sample z
+            # Sample z from current belief
             if self.training:
                 z = self.reparameterization(mu, logvar)
             else:
                 z = mu  # Use mean during evaluation
             
-            # Predict rewards
+            # Get observation t (which belief hasn't seen yet)
+            e_chosen = embeddings_chosen[:, t, :]
+            e_rejected = embeddings_rejected[:, t, :]
+            
+            # Predict rewards on observation t
             r_chosen, r_rejected = self.decoder(e_chosen, e_rejected, z)
             
             if return_trajectories:
@@ -255,6 +258,9 @@ class RecurrentVAEModel(nn.Module):
                 all_z.append(z)
                 all_rewards_chosen.append(r_chosen)
                 all_rewards_rejected.append(r_rejected)
+            
+            # Now update belief with observation t for next iteration
+            mu, logvar, h_curr, c_curr = self.encoder(e_chosen, e_rejected, h_curr, c_curr)
         
         if return_trajectories:
             return {
@@ -544,19 +550,26 @@ class TransformerVAEModel(nn.Module):
         
         # Process each timestep with attention over previous context
         for t in range(seq_len):
-            e_chosen = embeddings_chosen[:, t, :]
-            e_rejected = embeddings_rejected[:, t, :]
+            # KEY FIX: At timestep t, use belief from observations 0...t-1 only
+            if t == 0:
+                # No observations yet, use prior
+                mu = torch.zeros(batch_size, self.latent_dim, device=device)
+                logvar = torch.zeros(batch_size, self.latent_dim, device=device)
+            else:
+                # Attend to observations 0 to t-1 (not including t)
+                mu, logvar = self.encoder(sequence_pairs[:, :t, :], current_timestep=t-1)
             
-            # Attend to all observations up to and including current timestep
-            mu, logvar = self.encoder(sequence_pairs[:, :t+1, :], current_timestep=t)
-            
-            # Sample z
+            # Sample z from belief (based on observations 0...t-1)
             if self.training:
                 z = self.reparameterization(mu, logvar)
             else:
                 z = mu  # Use mean during evaluation
             
-            # Predict rewards
+            # Get observation t (which belief hasn't seen yet)
+            e_chosen = embeddings_chosen[:, t, :]
+            e_rejected = embeddings_rejected[:, t, :]
+            
+            # Predict rewards on observation t
             r_chosen, r_rejected = self.decoder(e_chosen, e_rejected, z)
             
             if return_trajectories:
@@ -667,21 +680,25 @@ class RecurrentVAETrainer(Trainer):
                         all_mu.append(torch.zeros(batch_size, self.latent_dim).to(device))
                         all_logvar.append(torch.zeros(batch_size, self.latent_dim).to(device))
                     continue
-            e_chosen = embeddings_chosen[:, t, :]
-            e_rejected = embeddings_rejected[:, t, :]
             
-            # Encoder (LSTM returns both h and c)
-            curr_mu, curr_logvar, h_curr, c_curr = model.encoder(e_chosen, e_rejected, h_curr, c_curr)
-            curr_mu = torch.clamp(curr_mu, -1, 1)
-            curr_logvar = torch.clamp(curr_logvar, -1, 1)
+            # KEY FIX: At timestep t, use belief from observations 0...t-1
+            # For t=0, use prior (no observations yet)
+            if t == 0:
+                curr_mu = torch.zeros(batch_size, self.latent_dim, device=device)
+                curr_logvar = torch.zeros(batch_size, self.latent_dim, device=device)
+            # else: curr_mu, curr_logvar already set from previous iteration
             
-            # Sample
+            # Sample z from current belief (based on observations 0...t-1)
             std = torch.exp(0.5 * curr_logvar)
             eps = torch.randn_like(std)
             z = curr_mu + eps * std
             z = F.normalize(z, p=2, dim=-1) * math.sqrt(z.shape[-1])
             
-            # Decoder
+            # Get observation t (which belief hasn't seen yet)
+            e_chosen = embeddings_chosen[:, t, :]
+            e_rejected = embeddings_rejected[:, t, :]
+            
+            # Predict on observation t
             r_chosen, r_rejected = model.decoder(e_chosen, e_rejected, z)
             
             # Losses with masking
@@ -718,11 +735,21 @@ class RecurrentVAETrainer(Trainer):
                 total_kl += kl_loss
                 num_valid_steps += 1
             
+            # Now update belief with observation t for next iteration
+            # (This ensures that at t+1, belief includes observations 0...t)
+            next_mu, next_logvar, h_curr, c_curr = model.encoder(e_chosen, e_rejected, h_curr, c_curr)
+            next_mu = torch.clamp(next_mu, -1, 1)
+            next_logvar = torch.clamp(next_logvar, -1, 1)
+            
             # Fix #6: Keep detach on mu/logvar (KL prior), but NO detach on h_curr/c_curr
             # This allows gradients to flow through the entire episode via LSTM states
             prev_mu = curr_mu.detach()
             prev_logvar = curr_logvar.detach()
             # h_curr and c_curr flow naturally to next iteration (no detach!)
+            
+            # Set curr for next iteration
+            curr_mu = next_mu
+            curr_logvar = next_logvar
             
             if return_outputs:
                 all_rewards_chosen.append(r_chosen.detach())
@@ -899,16 +926,24 @@ class TransformerVAETrainer(Trainer):
                         all_mu.append(torch.zeros(batch_size, self.latent_dim).to(device))
                         all_logvar.append(torch.zeros(batch_size, self.latent_dim).to(device))
                     continue
+            
+            # KEY FIX: At timestep t, use belief from observations 0...t-1 only
+            if t == 0:
+                # No observations yet, use prior
+                curr_mu = torch.zeros(batch_size, self.latent_dim, device=device)
+                curr_logvar = torch.zeros(batch_size, self.latent_dim, device=device)
+            else:
+                # Encode using attention over observations 0 to t-1 (not including t)
+                curr_mu, curr_logvar = model.encoder(sequence_pairs[:, :t, :], current_timestep=t-1)
+            
+            # Sample z from belief (based on observations 0...t-1)
+            z = model.reparameterization(curr_mu, curr_logvar)
+            
+            # Get observation t (which belief hasn't seen yet)
             e_chosen = embeddings_chosen[:, t, :]
             e_rejected = embeddings_rejected[:, t, :]
             
-            # Encode using attention over all observations up to current timestep
-            curr_mu, curr_logvar = model.encoder(sequence_pairs[:, :t+1, :], current_timestep=t)
-            
-            # Sample z
-            z = model.reparameterization(curr_mu, curr_logvar)
-            
-            # Decode
+            # Predict on observation t
             r_chosen, r_rejected = model.decoder(e_chosen, e_rejected, z)
             
             # Reconstruction loss (BTL) with masking

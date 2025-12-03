@@ -143,18 +143,25 @@ def evaluate_adaptation(
                         if not step_mask.any():
                             continue
                     
-                    e_chosen = embeddings_chosen[:, t, :]
-                    e_rejected = embeddings_rejected[:, t, :]
+                    # KEY FIX: At timestep t, use belief from observations 0...t-1 only
+                    if t == 0:
+                        # No observations yet, use prior
+                        mu = torch.zeros(batch_size, model.latent_dim).to(device)
+                        logvar = torch.zeros(batch_size, model.latent_dim).to(device)
+                    else:
+                        # Attend to observations 0 to t-1 (not including t)
+                        mu, logvar = model.encoder(sequence_pairs[:, :t, :], current_timestep=t-1)
                     
-                    # Attend to all observations up to current timestep
-                    mu, logvar = model.encoder(sequence_pairs[:, :t+1, :], current_timestep=t)
-                    
-                    # Sample z (Thompson sampling)
+                    # Sample z from belief (Thompson sampling)
                     std = torch.exp(0.5 * logvar)
                     eps = torch.randn_like(std)
                     z = mu + std * eps
                     
-                    # Predict rewards
+                    # Get observation t (which belief hasn't seen yet)
+                    e_chosen = embeddings_chosen[:, t, :]
+                    e_rejected = embeddings_rejected[:, t, :]
+                    
+                    # Predict on observation t
                     r_chosen, r_rejected = model.decoder(e_chosen, e_rejected, z)
                     
                     # Compute accuracy (only for non-padded samples)
@@ -170,6 +177,8 @@ def evaluate_adaptation(
                 # Recurrent: maintain LSTM hidden and cell states
                 h_curr = torch.zeros(batch_size, model.latent_dim).to(device)
                 c_curr = torch.zeros(batch_size, model.latent_dim).to(device)
+                mu = torch.zeros(batch_size, model.latent_dim).to(device)
+                logvar = torch.zeros(batch_size, model.latent_dim).to(device)
                 
                 # Process sequence timestep by timestep
                 for t in range(seq_length):
@@ -179,18 +188,19 @@ def evaluate_adaptation(
                         if not step_mask.any():
                             continue
                     
-                    e_chosen = embeddings_chosen[:, t, :]
-                    e_rejected = embeddings_rejected[:, t, :]
+                    # KEY FIX: At timestep t, use belief from observations 0...t-1
+                    # (mu, logvar already set from previous iteration, or prior for t=0)
                     
-                    # Update belief
-                    mu, logvar, h_curr, c_curr = model.encoder(e_chosen, e_rejected, h_curr, c_curr)
-                    
-                    # Thompson Sampling
+                    # Thompson Sampling from current belief
                     std = torch.exp(0.5 * logvar)
                     eps = torch.randn_like(std)
                     z = mu + std * eps
                     
-                    # Predict rewards
+                    # Get observation t (which belief hasn't seen yet)
+                    e_chosen = embeddings_chosen[:, t, :]
+                    e_rejected = embeddings_rejected[:, t, :]
+                    
+                    # Predict on observation t
                     r_chosen, r_rejected = model.decoder(e_chosen, e_rejected, z)
                     
                     # Compute accuracy (only for non-padded samples)
@@ -202,6 +212,9 @@ def evaluate_adaptation(
                         accuracies_per_timestep[t].append(correct.cpu())
                     all_rewards_chosen[t].append(r_chosen.cpu())
                     all_rewards_rejected[t].append(r_rejected.cpu())
+                    
+                    # Now update belief with observation t for next iteration
+                    mu, logvar, h_curr, c_curr = model.encoder(e_chosen, e_rejected, h_curr, c_curr)
     
     # Aggregate results
     mean_accuracies = []
