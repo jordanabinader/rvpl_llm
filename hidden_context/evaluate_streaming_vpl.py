@@ -250,10 +250,24 @@ def evaluate_adaptation(
         print(f"  t={t}: {valid_counts[t]} samples, accuracy={mean_accuracies[t]:.2%}")
     
     # Compute overall statistics
+    # Only use timesteps with sufficient data (min 50 samples or 25% of episodes)
+    MIN_SAMPLES = max(50, len(accuracies_per_timestep[0]) // 4)
+    usable_timesteps = [t for t, n in enumerate(valid_counts) if n >= MIN_SAMPLES]
+    
+    if len(usable_timesteps) < 2:
+        print(f"\n⚠️  Warning: Only {len(usable_timesteps)} timesteps have >= {MIN_SAMPLES} samples")
+        print(f"    Using all timesteps for metrics (may be noisy)")
+        usable_timesteps = list(range(seq_length))
+    
     overall_accuracy = np.mean(mean_accuracies)
     initial_accuracy = mean_accuracies[0]
-    final_accuracy = mean_accuracies[-1]
+    
+    # Use last usable timestep for "final" accuracy (not noisy tail)
+    final_t = usable_timesteps[-1]
+    final_accuracy = mean_accuracies[final_t]
     improvement = final_accuracy - initial_accuracy
+    
+    print(f"\nUsing t={final_t} (n={valid_counts[final_t]}) for final accuracy (not t={seq_length-1} with n={valid_counts[-1]})")
     
     return {
         'mean_accuracies': mean_accuracies,

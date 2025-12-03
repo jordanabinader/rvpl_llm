@@ -658,9 +658,7 @@ class RecurrentVAETrainer(Trainer):
         total_kl = 0.0
         num_valid_steps = 0  # Count non-padded steps
         
-        if self.model.training and not return_outputs:
-            self.kl_annealer.step()
-
+        # KL annealer is stepped in on_step_end, not here
         beta = self.kl_annealer.get_beta()
         
         if return_outputs:
@@ -900,11 +898,10 @@ class TransformerVAETrainer(Trainer):
         total_loss = 0.0
         total_recon = 0.0
         total_kl = 0.0
+        total_weight = 0.0  # Sum of weights for valid steps
         num_valid_steps = 0  # Count non-padded steps
         
-        if model.training and not return_outputs:
-            self.kl_annealer.step()
-        
+        # KL annealer is stepped in on_step_end, not here
         beta = self.kl_annealer.get_beta()
         
         if return_outputs:
@@ -962,8 +959,10 @@ class TransformerVAETrainer(Trainer):
                 # Subsequent timesteps: KL to previous belief
                 kl_raw = recursive_kl_div(curr_mu, curr_logvar, prev_mu, prev_logvar)
             
-            # Apply free bits threshold
-            kl_loss = torch.clamp(kl_raw, min=self.free_bits / self.latent_dim * batch_size)
+            # Apply free bits threshold (same as RecurrentVAETrainer)
+            kl_threshold = self.free_bits
+            kl_clipped = torch.max(kl_raw, torch.tensor(kl_threshold, device=device))
+            kl_loss = kl_clipped - kl_threshold  # Gradient only when past threshold
             
             # Temporal weighting
             weight = self.temporal_gamma ** t
@@ -972,7 +971,8 @@ class TransformerVAETrainer(Trainer):
             if mask is None or step_mask.any():
                 total_loss += weight * (recon_loss + beta * kl_loss)
                 total_recon += weight * recon_loss
-                total_kl += weight * kl_loss
+                total_kl += weight * kl_raw  # Log the actual KL, not the clipped version
+                total_weight += weight
                 num_valid_steps += 1
             
             # Update previous belief for next iteration
@@ -985,12 +985,11 @@ class TransformerVAETrainer(Trainer):
                 all_mu.append(curr_mu.detach())
                 all_logvar.append(curr_logvar.detach())
         
-        # Normalize by sum of weights (only for valid steps)
-        norm_factor = num_valid_steps if num_valid_steps > 0 else seq_len
-        weight_sum = sum(self.temporal_gamma ** t for t in range(norm_factor))
-        total_loss = total_loss / weight_sum
-        avg_recon = total_recon / weight_sum
-        avg_kl = total_kl / weight_sum
+        # Normalize by sum of actual weights used
+        total_weight = total_weight if total_weight > 0 else 1.0
+        total_loss = total_loss / total_weight
+        avg_recon = total_recon / total_weight
+        avg_kl = total_kl / total_weight
         
         if not return_outputs and self.state.global_step % 10 == 0:
             self.log({
