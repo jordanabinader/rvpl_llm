@@ -2,12 +2,12 @@
 #SBATCH --job-name=vpl_baseline_hh
 #SBATCH --output=logs/vpl_baseline_hh_%j.out
 #SBATCH --error=logs/vpl_baseline_hh_%j.err
-#SBATCH --time=24:00:00
+#SBATCH --time=00:30:00
 #SBATCH --partition=GPU-shared
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:1
 #SBATCH --mem=32GB
-
+#SBATCH -p mit_normal_gpu                   # GPU partition
 # Environment setup
 export WANDB_MODE=online
 export WANDB_PROJECT=streaming-vpl-hh

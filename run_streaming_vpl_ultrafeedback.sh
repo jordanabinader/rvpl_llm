@@ -1,12 +1,51 @@
 #!/bin/bash
 #
-# Training script for Streaming VPL on UltraFeedback Dataset
-# 
-# This script runs experiments on the P_4_survey_100 dataset with different configurations.
-# The dataset has 4 user types (1, 2, 4, 8) representing different preference patterns.
-#
+#SBATCH -J streaming_vpl_ultrafeedback            # Job name
+#SBATCH -p mit_normal_gpu                   # GPU partition
+#SBATCH -c 4                                # CPU cores
+#SBATCH --mem=32G                           # Memory
+#SBATCH -t 4:00:00                          # Time limit
+#SBATCH -G 1                                # 1 GPU
+#SBATCH -o logs/streaming_vpl_ultrafeedback_%j.out # STDOUT log
+#SBATCH -e logs/streaming_vpl_ultrafeedback_%j.err # STDERR log
 
-set -e  # Exit on error
+
+# Create logs directory
+mkdir -p logs
+
+# W&B Configuration
+export WANDB_MODE=online
+export WANDB_PROJECT="streaming-vpl-prism"
+export WANDB_LOG_MODEL="false"
+export WANDB_WATCH="false"
+
+# 1. Load the base system python
+module load miniforge
+
+# 2. Create the virtual environment (if it doesn't exist)
+if [ ! -d "venv" ]; then
+    echo "Creating virtual environment..."
+    python -m venv venv
+fi
+
+# 3. Activate the environment
+source venv/bin/activate
+
+# 4. Ensure we rely ONLY on this venv
+export PYTHONNOUSERSITE=1
+
+# 5. Upgrade pip
+python -m pip install --upgrade pip
+
+echo "Node: $(hostname)"
+echo "GPUs visible to this job:"
+nvidia-smi || echo "nvidia-smi not found"
+
+# Verify versions
+echo "Package versions in venv:"
+python -c "import transformers; print(f'transformers: {transformers.__version__}')"
+python -c "import torch; print(f'torch: {torch.__version__}')"
+
 
 # Default arguments
 DATA_PATH="data_release/P_4_survey_100/gpt2"
@@ -14,10 +53,10 @@ DATA_SUBSET="all"  # Can be: 1, 2, 4, 8, or all
 SEQ_LENGTH=10
 LATENT_DIM=64
 HIDDEN_DIM=256
-BETA_MAX=0.1
+BETA_MAX=0.12
 BETA_CYCLES=4
 TEMPORAL_GAMMA=1.1
-FREE_BITS=6.4
+FREE_BITS=8.0
 NUM_EPOCHS=20
 BATCH_SIZE=8
 LEARNING_RATE=1e-4
@@ -25,7 +64,7 @@ SEED=0
 LOG_DIR="experiments/streaming_vpl_ultrafeedback"
 
 # Use transformer or recurrent architecture
-USE_TRANSFORMER=false
+USE_TRANSFORMER=true
 NUM_ATTENTION_HEADS=4
 NUM_TRANSFORMER_LAYERS=2
 
@@ -144,8 +183,10 @@ CMD="python -m hidden_context.train_streaming_vpl \
     --bf16 \
     --gradient_accumulation_steps 1 \
     --eval_steps 100 \
-    --save_steps 1000"
-
+    --save_steps 1000 \
+    --allow_kl_gradient_flow True \
+    --use_contrastive True"
+    
 # Add transformer-specific arguments if needed
 if [ "$USE_TRANSFORMER" = true ]; then
     CMD="$CMD --use_transformer --num_attention_heads $NUM_ATTENTION_HEADS --num_transformer_layers $NUM_TRANSFORMER_LAYERS"
@@ -158,4 +199,3 @@ eval $CMD
 echo ""
 echo "Training complete! Results saved to: $LOG_DIR/$RUN_NAME"
 echo ""
-
