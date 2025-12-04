@@ -1,27 +1,26 @@
 #!/bin/bash
-#SBATCH --job-name=vpl_baseline_prism
-#SBATCH --output=logs/vpl_baseline_prism_%j.out
-#SBATCH --error=logs/vpl_baseline_prism_%j.err
-#SBATCH --time=24:00:00
-#SBATCH --partition=GPU-shared
-#SBATCH --nodes=1
-#SBATCH --gres=gpu:1
-#SBATCH --mem=32GB
+#SBATCH -J train_vpl_baseline_hh             # Job name
+#SBATCH -p mit_normal_gpu                 # GPU partition
+#SBATCH -c 4                              # CPU cores
+#SBATCH --mem=32G                         # Memory
+#SBATCH -t 0:30:00                        # Time limit (30 min)
+#SBATCH -G 1                              # 1 GPU
+#SBATCH -o logs/train_vpl_baseline_hh_%j.out # STDOUT log
+#SBATCH -e logs/train_vpl_baseline_hh_%j.err # STDERR log
+
 
 # Environment setup
 export WANDB_MODE=online
-export WANDB_PROJECT=streaming-vpl-prism
-export NCCL_P2P_DISABLE="1"
-export NCCL_IB_DISABLE="1"
+export WANDB_PROJECT=vpl-baseline-hh
 
 # Activate virtual environment
 source venv/bin/activate
 
 # Model and data configuration
 MODEL_NAME='gpt2'
-DATA_PATH="data_release/prism/gpt2"
-DATA_SUBSET="all"
-LOG_DIR="experiments/vpl_baseline_prism"
+DATA_PATH="data_release/hh_rlhf/gpt2/"
+DATA_SUBSET="both"  # 'harmless', 'helpful', or 'both'
+LOG_DIR="experiments/vpl_baseline_hh"
 
 # Train original VPL baseline on PRISM dataset
 python -m hidden_context.train_llm_vae_preference_model \
