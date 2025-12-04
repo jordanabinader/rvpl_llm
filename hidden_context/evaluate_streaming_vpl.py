@@ -284,8 +284,6 @@ def evaluate_adaptation(
                     all_rewards_rejected[t].append(r_rejected_store.cpu())
                     all_variances[t].append(avg_variance.cpu())
                     all_logvars[t].append(logvar_store.cpu())
-                    all_variances[t].append(avg_variance.cpu())
-                    all_logvars[t].append(logvar_store.cpu())
                     
                     # Now update belief with observation t for next iteration
                     mu, logvar, h_curr, c_curr = model.encoder(e_chosen, e_rejected, h_curr, c_curr)
@@ -295,26 +293,20 @@ def evaluate_adaptation(
     std_accuracies = []
     mean_variances = []
     std_variances = []
-    mean_variances = []
-    std_variances = []
     valid_counts = []
     
     for t in range(seq_length):
         accs = torch.cat(accuracies_per_timestep[t])
-        vars = torch.cat(all_variances[t])
         vars = torch.cat(all_variances[t])
         valid_counts.append(accs.numel())
         mean_accuracies.append(accs.mean().item())
         std_accuracies.append(accs.std().item())
         mean_variances.append(vars.mean().item())
         std_variances.append(vars.std().item())
-        mean_variances.append(vars.mean().item())
-        std_variances.append(vars.std().item())
     
     # Print valid sample counts per timestep for debugging
     print("\nValid samples per timestep:")
     for t in range(seq_length):
-        print(f"  t={t}: {valid_counts[t]} samples, accuracy={mean_accuracies[t]:.2%}, variance={mean_variances[t]:.4f}")
         print(f"  t={t}: {valid_counts[t]} samples, accuracy={mean_accuracies[t]:.2%}, variance={mean_variances[t]:.4f}")
     
     # Compute overall statistics
