@@ -138,7 +138,13 @@ def evaluate_adaptation(
                 for t in range(seq_length):
                     e_chosen = embeddings_chosen[:, t, :]
                     e_rejected = embeddings_rejected[:, t, :]
-                    pair = torch.cat([e_chosen, e_rejected], dim=-1)
+                    # Apply contrastive encoding: concatenate chosen, rejected, interaction, and difference
+                    pair = torch.cat([
+                        e_chosen,
+                        e_rejected,
+                        e_chosen * e_rejected,  # Interaction term
+                        e_chosen - e_rejected   # Difference term
+                    ], dim=-1)
                     pair_encoded = model.encoder.pair_encoder(pair)
                     all_pairs.append(pair_encoded)
                 sequence_pairs = torch.stack(all_pairs, dim=1)
