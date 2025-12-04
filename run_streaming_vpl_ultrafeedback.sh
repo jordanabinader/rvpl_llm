@@ -138,14 +138,16 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Build run name
+# Build run name (must match train_streaming_vpl.py output_dir construction)
+# Note: We don't include architecture in the path - train_streaming_vpl.py doesn't either
+RUN_NAME="${DATA_SUBSET}_seq${SEQ_LENGTH}_latent${LATENT_DIM}_hidden${HIDDEN_DIM}_beta${BETA_MAX}_freebits${FREE_BITS}_cycles${BETA_CYCLES}_gamma${TEMPORAL_GAMMA}_seed${SEED}"
+
+# Determine architecture string for logging
 if [ "$USE_TRANSFORMER" = true ]; then
     ARCH="transformer"
 else
     ARCH="recurrent"
 fi
-
-RUN_NAME="${DATA_SUBSET}_seq${SEQ_LENGTH}_latent${LATENT_DIM}_hidden${HIDDEN_DIM}_beta${BETA_MAX}_fb${FREE_BITS}_cycles${BETA_CYCLES}_gamma${TEMPORAL_GAMMA}_${ARCH}_seed${SEED}"
 
 # Create unique run ID (uses SLURM job ID if available, otherwise "local")
 RUN_ID_BASE="slurm_${SLURM_JOB_ID:-local}"
