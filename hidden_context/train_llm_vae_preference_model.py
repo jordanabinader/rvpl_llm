@@ -181,6 +181,10 @@ class HHRLHFPreprocessor(object):
         self.tokenizer_kwargs = tokenizer_kwargs
 
     def __call__(self, examples):
+        # Check if contexts field exists, if not use empty contexts
+        has_contexts = "contexts" in examples
+        contexts_list = examples.get("contexts", [[]] * len(examples["chosen"]))
+        
         if self.args.fixed_llm_embeddings:
             new_examples: dict = {
                 "embedding_chosen": [],
@@ -189,7 +193,7 @@ class HHRLHFPreprocessor(object):
                 "max_lengths": []
             }
             for embeddings, contexts in zip(
-                    examples["embeddings"], examples["contexts"]
+                    examples["embeddings"], contexts_list
             ):
                 new_examples["embedding_chosen"].append(embeddings["embedding_chosen"])
                 new_examples["embedding_rejected"].append(embeddings["embedding_rejected"])
@@ -213,7 +217,7 @@ class HHRLHFPreprocessor(object):
         else:
             new_examples["contexts_tokens"] = []
         for chosen, rejected, contexts, user_type in zip(
-                examples["chosen"], examples["rejected"], examples["contexts"], examples["data_subset"]
+                examples["chosen"], examples["rejected"], contexts_list, examples["data_subset"]
         ):
             max_length = 0
             tokenized_chosen = self.tokenizer(chosen, **self.tokenizer_kwargs)
@@ -596,7 +600,7 @@ if __name__ == "__main__":
         if script_args.tokenizer_name is not None
         else script_args.model_name
     )
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, use_auth_token=True, add_eos_token=False)
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, add_eos_token=False)
 
     peft_config = LoraConfig(
         task_type=TaskType.SEQ_CLS,

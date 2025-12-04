@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=vpl_baseline_prism
-#SBATCH --output=logs/vpl_baseline_prism_%j.out
-#SBATCH --error=logs/vpl_baseline_prism_%j.err
+#SBATCH --job-name=vpl_baseline_hh
+#SBATCH --output=logs/vpl_baseline_hh_%j.out
+#SBATCH --error=logs/vpl_baseline_hh_%j.err
 #SBATCH --time=24:00:00
 #SBATCH --partition=GPU-shared
 #SBATCH --nodes=1
@@ -10,7 +10,7 @@
 
 # Environment setup
 export WANDB_MODE=online
-export WANDB_PROJECT=streaming-vpl-prism
+export WANDB_PROJECT=streaming-vpl-hh
 export NCCL_P2P_DISABLE="1"
 export NCCL_IB_DISABLE="1"
 
@@ -19,11 +19,11 @@ source venv/bin/activate
 
 # Model and data configuration
 MODEL_NAME='gpt2'
-DATA_PATH="data_release/prism/gpt2"
-DATA_SUBSET="all"
-LOG_DIR="experiments/vpl_baseline_prism"
+DATA_PATH="data_release/hh_rlhf/gpt2"
+DATA_SUBSET="both"
+LOG_DIR="experiments/vpl_baseline_hh"
 
-# Train original VPL baseline on PRISM dataset
+# Train original VPL baseline on HH-RLHF dataset
 python -m hidden_context.train_llm_vae_preference_model \
     --model_name=${MODEL_NAME} \
     --data_path=${DATA_PATH} \
