@@ -154,7 +154,7 @@ def evaluate_adaptation(
                             e_chosen - e_rejected   # Difference term
                         ], dim=-1)
                     else:
-                        pair = torch.cat([e_chosen, e_rejected], dim=-1)
+                    pair = torch.cat([e_chosen, e_rejected], dim=-1)
                     pair_encoded = model.encoder.pair_encoder(pair)
                     all_pairs.append(pair_encoded)
                 sequence_pairs = torch.stack(all_pairs, dim=1)

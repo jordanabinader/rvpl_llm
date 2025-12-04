@@ -141,7 +141,7 @@ class RecurrentVPLEncoder(nn.Module):
                 e_chosen - e_rejected   # Difference term (what distinguishes them)
             ], dim=-1)
         else:
-            pair_embed = torch.cat([e_chosen, e_rejected], dim=-1)
+        pair_embed = torch.cat([e_chosen, e_rejected], dim=-1)
         
         # Step 1: Encode the comparison (observation)
         obs_feat = self.pair_encoder(pair_embed)  # [batch, obs_dim]
@@ -569,7 +569,7 @@ class TransformerVAEModel(nn.Module):
                     e_chosen - e_rejected   # Difference
                 ], dim=-1)  # [batch, 4*embed_dim]
             else:
-                pair = torch.cat([e_chosen, e_rejected], dim=-1)  # [batch, 2*embed_dim]
+            pair = torch.cat([e_chosen, e_rejected], dim=-1)  # [batch, 2*embed_dim]
             pair_encoded = self.encoder.pair_encoder(pair)  # [batch, hidden_dim]
             all_pairs.append(pair_encoded)
         
@@ -816,7 +816,7 @@ class RecurrentVAETrainer(Trainer):
                 prev_logvar = curr_logvar
             else:
                 prev_mu = curr_mu.detach()  # Treat as fixed target
-                prev_logvar = curr_logvar.detach()
+            prev_logvar = curr_logvar.detach()
             # h_curr and c_curr flow naturally to next iteration (no detach!)
             
             # Set curr for next iteration
@@ -983,7 +983,7 @@ class TransformerVAETrainer(Trainer):
                     e_chosen - e_rejected   # Difference
                 ], dim=-1)
             else:
-                pair = torch.cat([e_chosen, e_rejected], dim=-1)
+            pair = torch.cat([e_chosen, e_rejected], dim=-1)
             pair_encoded = model.encoder.pair_encoder(pair)
             all_pairs.append(pair_encoded)
         
@@ -1103,7 +1103,7 @@ class TransformerVAETrainer(Trainer):
                 prev_logvar = curr_logvar
             else:
                 prev_mu = curr_mu.detach()  # Fixed target (default)
-                prev_logvar = curr_logvar.detach()
+            prev_logvar = curr_logvar.detach()
             
             if return_outputs:
                 all_rewards_chosen.append(r_chosen.detach())
