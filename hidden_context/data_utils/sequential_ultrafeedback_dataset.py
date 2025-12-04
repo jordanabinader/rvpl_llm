@@ -118,10 +118,23 @@ class SequentialUltraFeedbackDataset(Dataset):
             file_path = f"{self.data_path}/{subset}/{self.split}.jsonl"
             
             try:
+                print(f"Loading from: {file_path}")
                 with open(file_path, 'r') as f:
                     subset_data = []
+                    line_num = 0
+                    bad_lines = 0
                     for line in f:
-                        item = json.loads(line.strip())
+                        line_num += 1
+                        if not line.strip():  # Skip empty lines
+                            continue
+                        try:
+                            item = json.loads(line.strip())
+                        except json.JSONDecodeError as e:
+                            bad_lines += 1
+                            if bad_lines <= 5:  # Only print first 5 errors
+                                print(f"  Warning: Skipping malformed JSON at line {line_num}: {str(e)[:200]}")
+                            continue
+                        
                         # Check if embeddings exist
                         if 'embeddings' not in item:
                             continue
@@ -135,7 +148,11 @@ class SequentialUltraFeedbackDataset(Dataset):
                     # Use subset as user type
                     user_type = int(subset)
                     self.pools[user_type] = subset_data
-                    print(f"Loaded {len(subset_data)} samples from subset {subset}")
+                    
+                    if bad_lines > 0:
+                        print(f"  Loaded {len(subset_data)} valid samples from subset {subset} (skipped {bad_lines} bad lines out of {line_num} total)")
+                    else:
+                        print(f"  Loaded {len(subset_data)} samples from subset {subset} (all {line_num} lines valid)")
                     
             except FileNotFoundError:
                 print(f"Warning: {file_path} not found, skipping subset {subset}")
