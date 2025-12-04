@@ -213,16 +213,9 @@ def evaluate_adaptation(
                     else:
                         logvar_store = logvar
                     
-                        avg_variance = avg_variance[valid]
-                        logvar_store = logvar[valid]
-                    else:
-                        logvar_store = logvar
-                    
                     accuracies_per_timestep[t].append(correct.cpu())
                     all_rewards_chosen[t].append(r_chosen.cpu())
                     all_rewards_rejected[t].append(r_rejected.cpu())
-                    all_variances[t].append(avg_variance.cpu())
-                    all_logvars[t].append(logvar_store.cpu())
                     all_variances[t].append(avg_variance.cpu())
                     all_logvars[t].append(logvar_store.cpu())
             else:
@@ -413,10 +406,7 @@ def plot_adaptation_curve(
     timesteps = list(range(seq_length))
     
     # ========== SUBPLOT 1: Accuracy ==========
-    # ========== SUBPLOT 1: Accuracy ==========
     # Plot mean accuracy with error bars
-    ax1.plot(timesteps, mean_accs, 'b-o', linewidth=2, markersize=8, label='Mean Accuracy')
-    ax1.fill_between(
     ax1.plot(timesteps, mean_accs, 'b-o', linewidth=2, markersize=8, label='Mean Accuracy')
     ax1.fill_between(
         timesteps,
@@ -428,16 +418,8 @@ def plot_adaptation_curve(
     
     # Add baseline (random guessing)
     ax1.axhline(y=0.5, color='r', linestyle='--', linewidth=1, label='Random Baseline')
-    ax1.axhline(y=0.5, color='r', linestyle='--', linewidth=1, label='Random Baseline')
     
     # Formatting
-    ax1.set_xlabel('Interaction Number (t)', fontsize=14)
-    ax1.set_ylabel('Accuracy', fontsize=14)
-    ax1.set_title('Sequential Adaptation in Streaming VPL', fontsize=16, fontweight='bold')
-    ax1.set_xticks(timesteps)
-    ax1.set_ylim([0.4, 1.0])
-    ax1.grid(True, alpha=0.3)
-    ax1.legend(fontsize=12)
     ax1.set_xlabel('Interaction Number (t)', fontsize=14)
     ax1.set_ylabel('Accuracy', fontsize=14)
     ax1.set_title('Sequential Adaptation in Streaming VPL', fontsize=16, fontweight='bold')
@@ -449,12 +431,10 @@ def plot_adaptation_curve(
     # Add annotation showing improvement
     improvement = results['improvement']
     ax1.text(
-    ax1.text(
         0.98, 0.02,
         f"Improvement: {improvement:.1%}\n"
         f"Initial: {results['initial_accuracy']:.1%}\n"
         f"Final: {results['final_accuracy']:.1%}",
-        transform=ax1.transAxes,
         transform=ax1.transAxes,
         fontsize=10,
         verticalalignment='bottom',
@@ -757,20 +737,13 @@ def main():
     })
     
     # Log per-timestep accuracies and variances as a table
-    # Log per-timestep accuracies and variances as a table
     timestep_table = wandb.Table(
         columns=["timestep", "accuracy", "accuracy_std", "variance", "variance_std"],
         data=[[t, acc_mean, acc_std, var_mean, var_std] 
               for t, (acc_mean, acc_std, var_mean, var_std) in enumerate(
                   zip(results['mean_accuracies'], results['std_accuracies'],
                       results['mean_variances'], results['std_variances']))]
-        columns=["timestep", "accuracy", "accuracy_std", "variance", "variance_std"],
-        data=[[t, acc_mean, acc_std, var_mean, var_std] 
-              for t, (acc_mean, acc_std, var_mean, var_std) in enumerate(
-                  zip(results['mean_accuracies'], results['std_accuracies'],
-                      results['mean_variances'], results['std_variances']))]
     )
-    wandb.log({"eval/timestep_metrics": timestep_table})
     wandb.log({"eval/timestep_metrics": timestep_table})
     
     # Log adaptation curve as image

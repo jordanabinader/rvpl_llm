@@ -978,18 +978,16 @@ class TransformerVAETrainer(Trainer):
         for t in range(seq_len):
             e_chosen = embeddings_chosen[:, t, :]
             e_rejected = embeddings_rejected[:, t, :]
-            pair = torch.cat([
-                e_chosen, 
-                e_rejected, 
-                e_chosen * e_rejected,  # Interaction
-                e_chosen - e_rejected   # Difference
-            ], dim=-1)
-            pair = torch.cat([
-                e_chosen, 
-                e_rejected, 
-                e_chosen * e_rejected,  # Interaction
-                e_chosen - e_rejected   # Difference
-            ], dim=-1)
+            # Optionally apply contrastive encoding (must match model architecture)
+            if model.encoder.use_contrastive:
+                pair = torch.cat([
+                    e_chosen, 
+                    e_rejected, 
+                    e_chosen * e_rejected,  # Interaction
+                    e_chosen - e_rejected   # Difference
+                ], dim=-1)
+            else:
+                pair = torch.cat([e_chosen, e_rejected], dim=-1)
             pair_encoded = model.encoder.pair_encoder(pair)
             all_pairs.append(pair_encoded)
         
