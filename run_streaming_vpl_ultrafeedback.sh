@@ -215,28 +215,28 @@ echo ""
 echo "To evaluate this model, run:"
 echo ""
 if [ "$USE_TRANSFORMER" = true ]; then
-    echo "python -m hidden_context.evaluate_streaming_vpl \\"
-    echo "    --model_path ${OUTPUT_DIR}/final_checkpoint/model.pt \\"
-    echo "    --data_path $DATA_PATH \\"
-    echo "    --data_subset $DATA_SUBSET \\"
-    echo "    --seq_length $SEQ_LENGTH \\"
-    echo "    --latent_dim $LATENT_DIM \\"
-    echo "    --hidden_dim $HIDDEN_DIM \\"
-    echo "    --use_transformer \\"
-    echo "    --num_attention_heads $NUM_ATTENTION_HEADS \\"
-    echo "    --num_transformer_layers $NUM_TRANSFORMER_LAYERS \\"
-    echo "    --num_eval_episodes 500 \\"
-    echo "    --seed $SEED"
+    python -m hidden_context.evaluate_streaming_vpl  \
+    --model_path ${OUTPUT_DIR}/final_checkpoint/model.pt \
+    --data_path $DATA_PATH \
+    --data_subset $DATA_SUBSET \
+    --seq_length $SEQ_LENGTH \
+    --latent_dim $LATENT_DIM \
+    --hidden_dim $HIDDEN_DIM \
+    --use_transformer \
+    --num_attention_heads $NUM_ATTENTION_HEADS \
+    --num_transformer_layers $NUM_TRANSFORMER_LAYERS \
+    --num_eval_episodes 500 \
+    --seed $SEED
 else
-    echo "python -m hidden_context.evaluate_streaming_vpl \\"
-    echo "    --model_path ${OUTPUT_DIR}/final_checkpoint/model.pt \\"
-    echo "    --data_path $DATA_PATH \\"
-    echo "    --data_subset $DATA_SUBSET \\"
-    echo "    --seq_length $SEQ_LENGTH \\"
-    echo "    --latent_dim $LATENT_DIM \\"
-    echo "    --hidden_dim $HIDDEN_DIM \\"
-    echo "    --num_eval_episodes 500 \\"
-    echo "    --seed $SEED"
+    python -m hidden_context.evaluate_streaming_vpl \
+    --model_path ${OUTPUT_DIR}/final_checkpoint/model.pt \
+    --data_path $DATA_PATH \
+    --data_subset $DATA_SUBSET \
+    --seq_length $SEQ_LENGTH \
+    --latent_dim $LATENT_DIM \
+    --hidden_dim $HIDDEN_DIM \
+    --num_eval_episodes 500 \
+    --seed $SEED
 fi
 echo ""
 echo "================================"
