@@ -53,6 +53,10 @@ class EvalArguments:
     )
     num_attention_heads: int = field(default=4)
     num_transformer_layers: int = field(default=2)
+    use_contrastive: bool = field(
+        default=True,
+        metadata={"help": "Use contrastive features (must match training)"}
+    )
     
     # Evaluation arguments
     seq_length: int = field(
@@ -138,13 +142,16 @@ def evaluate_adaptation(
                 for t in range(seq_length):
                     e_chosen = embeddings_chosen[:, t, :]
                     e_rejected = embeddings_rejected[:, t, :]
-                    # Apply contrastive encoding: concatenate chosen, rejected, interaction, and difference
-                    pair = torch.cat([
-                        e_chosen,
-                        e_rejected,
-                        e_chosen * e_rejected,  # Interaction term
-                        e_chosen - e_rejected   # Difference term
-                    ], dim=-1)
+                    # Optionally apply contrastive encoding (must match training)
+                    if model.encoder.use_contrastive:
+                        pair = torch.cat([
+                            e_chosen,
+                            e_rejected,
+                            e_chosen * e_rejected,  # Interaction term
+                            e_chosen - e_rejected   # Difference term
+                        ], dim=-1)
+                    else:
+                        pair = torch.cat([e_chosen, e_rejected], dim=-1)
                     pair_encoded = model.encoder.pair_encoder(pair)
                     all_pairs.append(pair_encoded)
                 sequence_pairs = torch.stack(all_pairs, dim=1)
@@ -465,6 +472,7 @@ def main():
             'num_attention_heads': 'num_attention_heads',
             'num_transformer_layers': 'num_transformer_layers',
             'transformer_dropout': 'transformer_dropout',
+            'use_contrastive': 'use_contrastive',
         }
         
         for config_key, arg_name in config_to_arg.items():
@@ -575,7 +583,8 @@ def main():
             hidden_dim=args.hidden_dim,
             latent_dim=args.latent_dim,
             num_heads=args.num_attention_heads,
-            num_layers=args.num_transformer_layers
+            num_layers=args.num_transformer_layers,
+            use_contrastive=args.use_contrastive
         )
     else:
         print("Using Recurrent (LSTM) architecture")
@@ -583,7 +592,8 @@ def main():
             encoder_embed_dim=args.encoder_embed_dim,
             decoder_embed_dim=args.decoder_embed_dim,
             hidden_dim=args.hidden_dim,
-            latent_dim=args.latent_dim
+            latent_dim=args.latent_dim,
+            use_contrastive=args.use_contrastive
         )
     
     # Load trained weights

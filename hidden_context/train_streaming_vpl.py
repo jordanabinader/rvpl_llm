@@ -109,6 +109,10 @@ class ScriptArguments:
         default=False,
         metadata={"help": "Allow gradients to flow through KL prior (enables smoother belief trajectories but less stable)"}
     )
+    use_contrastive: bool = field(
+        default=True,
+        metadata={"help": "Use contrastive features (interaction and difference terms) in encoder"}
+    )
     # ---------------------------------------------
     
     # Training arguments
@@ -277,7 +281,8 @@ if __name__ == "__main__":
             latent_dim=script_args.latent_dim,
             num_heads=script_args.num_attention_heads,
             num_layers=script_args.num_transformer_layers,
-            dropout=script_args.transformer_dropout
+            dropout=script_args.transformer_dropout,
+            use_contrastive=script_args.use_contrastive
         )
     else:
         print("Using Recurrent architecture (LSTM)")
@@ -285,7 +290,8 @@ if __name__ == "__main__":
             encoder_embed_dim=script_args.encoder_embed_dim,
             decoder_embed_dim=script_args.decoder_embed_dim,
             hidden_dim=script_args.hidden_dim,
-            latent_dim=script_args.latent_dim
+            latent_dim=script_args.latent_dim,
+            use_contrastive=script_args.use_contrastive
         )
     
     # Count parameters
@@ -358,7 +364,8 @@ if __name__ == "__main__":
         beta_cycles=script_args.beta_cycles,
         temporal_gamma=script_args.temporal_gamma,
         free_bits=script_args.free_bits,
-        allow_kl_gradient_flow=script_args.allow_kl_gradient_flow
+        allow_kl_gradient_flow=script_args.allow_kl_gradient_flow,
+        use_contrastive=script_args.use_contrastive
     )
     
     # Add callback for first-step evaluation
@@ -405,6 +412,7 @@ if __name__ == "__main__":
         'temporal_gamma': script_args.temporal_gamma,
         'free_bits': script_args.free_bits,
         'allow_kl_gradient_flow': script_args.allow_kl_gradient_flow,
+        'use_contrastive': script_args.use_contrastive,
         'seed': script_args.seed,
         'output_dir': output_dir
     }

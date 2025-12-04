@@ -75,18 +75,20 @@ class RecurrentVPLEncoder(nn.Module):
     3. Projection: Maps hidden state → (mu, logvar) for VAE
     """
     
-    def __init__(self, embed_dim: int, latent_dim: int, hidden_dim: int):
+    def __init__(self, embed_dim: int, latent_dim: int, hidden_dim: int, use_contrastive: bool = True):
         """
         Args:
             embed_dim: Dimension of input embeddings
             latent_dim: Dimension of latent space (z)
             hidden_dim: Dimension of hidden layer in pair encoder
+            use_contrastive: Whether to use contrastive features (interaction, difference)
         """
         super(RecurrentVPLEncoder, self).__init__()
         
         self.embed_dim = embed_dim
         self.latent_dim = latent_dim
         self.hidden_dim = hidden_dim
+        self.use_contrastive = use_contrastive
         
         # Step 1: Comparison logic (with non-linearity)
         # Reuse PairEncoder from vae_utils.py which has LeakyReLU
@@ -96,10 +98,11 @@ class RecurrentVPLEncoder(nn.Module):
         # - Narrower latent bottleneck (64) to force compression
         self.obs_dim = 256  # Increased from 64 to capture more detail
         
-        # Contrastive pair encoder: takes [chosen, rejected, interaction, difference]
-        # Input dim is 4 * embed_dim (for contrastive features)
+        # Contrastive pair encoder: takes [chosen, rejected, (optional) interaction, difference]
+        # Input dim is 4 * embed_dim (if contrastive) or 2 * embed_dim (if not)
+        pair_input_dim = 4 * embed_dim if use_contrastive else 2 * embed_dim
         self.pair_encoder = nn.Sequential(
-            nn.Linear(4 * embed_dim, hidden_dim),  # Changed from 2 * embed_dim
+            nn.Linear(pair_input_dim, hidden_dim),
             nn.LeakyReLU(0.2),
             nn.Linear(hidden_dim, self.obs_dim),  # Output wider feature
             nn.LeakyReLU(0.2)
@@ -128,14 +131,18 @@ class RecurrentVPLEncoder(nn.Module):
             h_curr: Current hidden state [batch, latent_dim]
             c_curr: Current cell state [batch, latent_dim]
         """
-        # Contrastive Observation Encoder: Add interaction and difference terms
+        # Observation Encoder: Optionally add contrastive features (interaction and difference terms)
         # This helps the model focus on what changed between options
-        pair_embed = torch.cat([
-            e_chosen,
-            e_rejected,
-            e_chosen * e_rejected,  # Interaction term
-            e_chosen - e_rejected   # Difference term (what distinguishes them)
-        ], dim=-1)
+        if self.use_contrastive:
+            pair_embed = torch.cat([
+                e_chosen,
+                e_rejected,
+                e_chosen * e_rejected,  # Interaction term
+                e_chosen - e_rejected   # Difference term (what distinguishes them)
+            ], dim=-1)
+        else:
+            pair_embed = torch.cat([e_chosen, e_rejected], dim=-1)
+        
         # Step 1: Encode the comparison (observation)
         obs_feat = self.pair_encoder(pair_embed)  # [batch, obs_dim]
         
@@ -162,7 +169,8 @@ class RecurrentVAEModel(nn.Module):
         encoder_embed_dim: int,
         decoder_embed_dim: int,
         hidden_dim: int,
-        latent_dim: int
+        latent_dim: int,
+        use_contrastive: bool = True
     ):
         """
         Args:
@@ -170,6 +178,7 @@ class RecurrentVAEModel(nn.Module):
             decoder_embed_dim: Dimension of embeddings for decoder (target)
             hidden_dim: Dimension of hidden layers
             latent_dim: Dimension of latent space
+            use_contrastive: Whether to use contrastive features (interaction, difference)
         """
         super(RecurrentVAEModel, self).__init__()
         
@@ -177,9 +186,10 @@ class RecurrentVAEModel(nn.Module):
         self.decoder_embed_dim = decoder_embed_dim
         self.hidden_dim = hidden_dim
         self.latent_dim = latent_dim
+        self.use_contrastive = use_contrastive
         
         # Recurrent encoder
-        self.encoder = RecurrentVPLEncoder(encoder_embed_dim, latent_dim, hidden_dim)
+        self.encoder = RecurrentVPLEncoder(encoder_embed_dim, latent_dim, hidden_dim, use_contrastive)
         
         # Decoder (reuse from vae_utils.py)
         # self.decoder = Decoder(decoder_embed_dim + latent_dim, hidden_dim)
@@ -373,7 +383,8 @@ class TransformerVPLEncoder(nn.Module):
     """
     
     def __init__(self, embed_dim: int, latent_dim: int, hidden_dim: int, 
-                 num_heads: int = 4, num_layers: int = 2, dropout: float = 0.1):
+                 num_heads: int = 4, num_layers: int = 2, dropout: float = 0.1,
+                 use_contrastive: bool = True):
         """
         Args:
             embed_dim: Dimension of input embeddings
@@ -382,16 +393,19 @@ class TransformerVPLEncoder(nn.Module):
             num_heads: Number of attention heads
             num_layers: Number of transformer layers
             dropout: Dropout rate
+            use_contrastive: Whether to use contrastive features (interaction, difference)
         """
         super(TransformerVPLEncoder, self).__init__()
         
         self.embed_dim = embed_dim
         self.latent_dim = latent_dim
         self.hidden_dim = hidden_dim
+        self.use_contrastive = use_contrastive
         
-        # Contrastive pair encoder: combines chosen, rejected, interaction, and difference
+        # Contrastive pair encoder: optionally combines chosen, rejected, interaction, and difference
+        pair_input_dim = embed_dim * 4 if use_contrastive else embed_dim * 2
         self.pair_encoder = nn.Sequential(
-            nn.Linear(embed_dim * 4, hidden_dim),  # Changed from 2x to 4x for contrastive features
+            nn.Linear(pair_input_dim, hidden_dim),
             nn.LayerNorm(hidden_dim),
             nn.ReLU(),
             nn.Dropout(dropout),
@@ -480,7 +494,8 @@ class TransformerVAEModel(nn.Module):
         latent_dim: int,
         num_heads: int = 4,
         num_layers: int = 2,
-        dropout: float = 0.1
+        dropout: float = 0.1,
+        use_contrastive: bool = True
     ):
         """
         Args:
@@ -491,6 +506,7 @@ class TransformerVAEModel(nn.Module):
             num_heads: Number of attention heads
             num_layers: Number of transformer layers
             dropout: Dropout rate
+            use_contrastive: Whether to use contrastive features (interaction, difference)
         """
         super(TransformerVAEModel, self).__init__()
         
@@ -498,11 +514,12 @@ class TransformerVAEModel(nn.Module):
         self.decoder_embed_dim = decoder_embed_dim
         self.hidden_dim = hidden_dim
         self.latent_dim = latent_dim
+        self.use_contrastive = use_contrastive
         
         # Transformer encoder
         self.encoder = TransformerVPLEncoder(
             encoder_embed_dim, latent_dim, hidden_dim,
-            num_heads, num_layers, dropout
+            num_heads, num_layers, dropout, use_contrastive
         )
         
         # Reuse HyperDecoder from recurrent version
@@ -629,6 +646,7 @@ class RecurrentVAETrainer(Trainer):
         temporal_gamma: float = 1.1, # Weight later timesteps more
         free_bits: float = 6.4, # Free bits threshold for KL divergence
         allow_kl_gradient_flow: bool = False, # Allow gradients to flow through KL prior
+        use_contrastive: bool = True, # Use contrastive features (interaction, difference)
         **kwargs
     ):
         super().__init__(*args, **kwargs)
@@ -638,6 +656,7 @@ class RecurrentVAETrainer(Trainer):
         self.temporal_gamma = temporal_gamma
         self.free_bits = free_bits
         self.allow_kl_gradient_flow = allow_kl_gradient_flow
+        self.use_contrastive = use_contrastive
         
         # Estimate total steps based on dataset size and batch size
         # This is an approximation; Trainer usually handles this but we need it for annealing
@@ -655,6 +674,7 @@ class RecurrentVAETrainer(Trainer):
         print(f"  Cyclical Annealing: Max Beta {beta_max}, Cycles {beta_cycles}")
         print(f"  Free Bits Threshold: {free_bits}")
         print(f"  KL Gradient Flow: {allow_kl_gradient_flow}")
+        print(f"  Use Contrastive Features: {use_contrastive}")
         print(f"  Total Steps: {total_steps}")
         print(f"  Steps per Cycle: {total_steps // beta_cycles}")
         print(f"  Initial Beta: {self.kl_annealer.get_beta():.6f}")
@@ -883,6 +903,7 @@ class TransformerVAETrainer(Trainer):
         temporal_gamma: float = 1.1,
         free_bits: float = 6.4,
         allow_kl_gradient_flow: bool = False,
+        use_contrastive: bool = True,
         **kwargs
     ):
         super().__init__(*args, **kwargs)
@@ -892,6 +913,7 @@ class TransformerVAETrainer(Trainer):
         self.temporal_gamma = temporal_gamma
         self.free_bits = free_bits
         self.allow_kl_gradient_flow = allow_kl_gradient_flow
+        self.use_contrastive = use_contrastive
         
         # Estimate total steps
         if self.args.max_steps > 0:
@@ -907,6 +929,7 @@ class TransformerVAETrainer(Trainer):
         print(f"  Cyclical Annealing: Max Beta {beta_max}, Cycles {beta_cycles}")
         print(f"  Free Bits Threshold: {free_bits}")
         print(f"  KL Gradient Flow: {allow_kl_gradient_flow}")
+        print(f"  Use Contrastive Features: {use_contrastive}")
         print(f"  Architecture: Self-Attention (Transformer)")
         print(f"  Total Steps: {total_steps}")
         print(f"  Steps per Cycle: {total_steps // beta_cycles}")
