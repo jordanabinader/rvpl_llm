@@ -147,6 +147,12 @@ fi
 
 RUN_NAME="${DATA_SUBSET}_seq${SEQ_LENGTH}_latent${LATENT_DIM}_hidden${HIDDEN_DIM}_beta${BETA_MAX}_fb${FREE_BITS}_cycles${BETA_CYCLES}_gamma${TEMPORAL_GAMMA}_${ARCH}_seed${SEED}"
 
+# Create unique run ID (uses SLURM job ID if available, otherwise "local")
+RUN_ID_BASE="slurm_${SLURM_JOB_ID:-local}"
+
+# Full output directory
+OUTPUT_DIR="${LOG_DIR}/${RUN_NAME}/${RUN_ID_BASE}"
+
 echo "="
 echo "Starting Streaming VPL Training on UltraFeedback"
 echo "="
@@ -161,6 +167,8 @@ echo "Cyclical cycles: $BETA_CYCLES"
 echo "Temporal gamma: $TEMPORAL_GAMMA"
 echo "Seed: $SEED"
 echo "Run name: $RUN_NAME"
+echo "Run ID: $RUN_ID_BASE"
+echo "Output dir: $OUTPUT_DIR"
 echo "="
 
 # Build command
@@ -180,12 +188,11 @@ CMD="python -m hidden_context.train_streaming_vpl \
     --learning_rate $LEARNING_RATE \
     --seed $SEED \
     --log_dir $LOG_DIR \
+    --run_id $RUN_ID_BASE \
     --bf16 \
     --gradient_accumulation_steps 1 \
     --eval_steps 100 \
-    --save_steps 1000 \
-    --allow_kl_gradient_flow True \
-    --use_contrastive True"
+    --save_steps 1000"
     
 # Add transformer-specific arguments if needed
 if [ "$USE_TRANSFORMER" = true ]; then
@@ -197,5 +204,38 @@ echo "Running: $CMD"
 eval $CMD
 
 echo ""
-echo "Training complete! Results saved to: $LOG_DIR/$RUN_NAME"
+echo "================================"
+echo "Training complete!"
+echo "================================"
+echo ""
+echo "Model saved to: ${OUTPUT_DIR}/final_checkpoint/model.pt"
+echo ""
+echo "To evaluate this model, run:"
+echo ""
+if [ "$USE_TRANSFORMER" = true ]; then
+    echo "python -m hidden_context.evaluate_streaming_vpl \\"
+    echo "    --model_path ${OUTPUT_DIR}/final_checkpoint/model.pt \\"
+    echo "    --data_path $DATA_PATH \\"
+    echo "    --data_subset $DATA_SUBSET \\"
+    echo "    --seq_length $SEQ_LENGTH \\"
+    echo "    --latent_dim $LATENT_DIM \\"
+    echo "    --hidden_dim $HIDDEN_DIM \\"
+    echo "    --use_transformer \\"
+    echo "    --num_attention_heads $NUM_ATTENTION_HEADS \\"
+    echo "    --num_transformer_layers $NUM_TRANSFORMER_LAYERS \\"
+    echo "    --num_eval_episodes 500 \\"
+    echo "    --seed $SEED"
+else
+    echo "python -m hidden_context.evaluate_streaming_vpl \\"
+    echo "    --model_path ${OUTPUT_DIR}/final_checkpoint/model.pt \\"
+    echo "    --data_path $DATA_PATH \\"
+    echo "    --data_subset $DATA_SUBSET \\"
+    echo "    --seq_length $SEQ_LENGTH \\"
+    echo "    --latent_dim $LATENT_DIM \\"
+    echo "    --hidden_dim $HIDDEN_DIM \\"
+    echo "    --num_eval_episodes 500 \\"
+    echo "    --seed $SEED"
+fi
+echo ""
+echo "================================"
 echo ""

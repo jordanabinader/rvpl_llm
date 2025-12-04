@@ -20,6 +20,7 @@ import wandb
 from .data_utils.sequential_pets_dataset import SequentialPetsDataset, sequential_collate_fn
 from .data_utils.sequential_hh_dataset import SequentialHHDataset, sequential_hh_collate_fn
 from .data_utils.sequential_prism_dataset import SequentialPRISMDataset, sequential_prism_collate_fn
+from .data_utils.sequential_ultrafeedback_dataset import SequentialUltraFeedbackDataset, sequential_ultrafeedback_collate_fn
 from .recurrent_vae_utils import RecurrentVAEModel, TransformerVAEModel
 
 
@@ -111,12 +112,9 @@ def evaluate_adaptation(
     model.to(device)
     
     # Storage for per-timestep accuracies and uncertainty metrics
-    # Storage for per-timestep accuracies and uncertainty metrics
     accuracies_per_timestep = [[] for _ in range(seq_length)]
     all_rewards_chosen = [[] for _ in range(seq_length)]
     all_rewards_rejected = [[] for _ in range(seq_length)]
-    all_variances = [[] for _ in range(seq_length)]  # Track uncertainty (variance)
-    all_logvars = [[] for _ in range(seq_length)]  # Track raw logvar for plotting
     all_variances = [[] for _ in range(seq_length)]  # Track uncertainty (variance)
     all_logvars = [[] for _ in range(seq_length)]  # Track raw logvar for plotting
     
@@ -154,7 +152,7 @@ def evaluate_adaptation(
                             e_chosen - e_rejected   # Difference term
                         ], dim=-1)
                     else:
-                    pair = torch.cat([e_chosen, e_rejected], dim=-1)
+                        pair = torch.cat([e_chosen, e_rejected], dim=-1)
                     pair_encoded = model.encoder.pair_encoder(pair)
                     all_pairs.append(pair_encoded)
                 sequence_pairs = torch.stack(all_pairs, dim=1)
@@ -193,11 +191,6 @@ def evaluate_adaptation(
                     
                     # Compute accuracy (exclude padded samples entirely)
                     correct = (r_chosen > r_rejected).float().squeeze(-1)  # [batch]
-                    
-                    # Compute uncertainty: average variance across latent dimensions
-                    variance = torch.exp(logvar)  # Convert log variance to variance
-                    avg_variance = variance.mean(dim=-1)  # [batch]
-                    
                     
                     # Compute uncertainty: average variance across latent dimensions
                     variance = torch.exp(logvar)  # Convert log variance to variance
@@ -258,11 +251,6 @@ def evaluate_adaptation(
                     variance = torch.exp(logvar)  # Convert log variance to variance
                     avg_variance = variance.mean(dim=-1)  # [batch]
                     
-                    
-                    # Compute uncertainty: average variance across latent dimensions
-                    variance = torch.exp(logvar)  # Convert log variance to variance
-                    avg_variance = variance.mean(dim=-1)  # [batch]
-                    
                     if mask is not None:
                         valid = step_mask.bool()  # [batch]
                         correct = correct[valid]  # keep only real timesteps
@@ -270,13 +258,9 @@ def evaluate_adaptation(
                         r_rejected_store = r_rejected[valid]
                         avg_variance = avg_variance[valid]
                         logvar_store = logvar[valid]
-                        avg_variance = avg_variance[valid]
-                        logvar_store = logvar[valid]
                     else:
                         r_chosen_store = r_chosen
                         r_rejected_store = r_rejected
-                        logvar_store = logvar
-                    
                         logvar_store = logvar
                     
                     accuracies_per_timestep[t].append(correct.cpu())
@@ -354,15 +338,10 @@ def evaluate_adaptation(
         'std_accuracies': std_accuracies,
         'mean_variances': mean_variances,
         'std_variances': std_variances,
-        'mean_variances': mean_variances,
-        'std_variances': std_variances,
         'overall_accuracy': overall_accuracy,
         'initial_accuracy': initial_accuracy,
         'final_accuracy': final_accuracy,
         'improvement': improvement,
-        'initial_variance': initial_variance,
-        'final_variance': final_variance,
-        'uncertainty_reduction': uncertainty_reduction,
         'initial_variance': initial_variance,
         'final_variance': final_variance,
         'uncertainty_reduction': uncertainty_reduction,
@@ -376,7 +355,6 @@ def plot_adaptation_curve(
 ):
     """
     Create and save adaptation curve plot with accuracy and uncertainty.
-    Create and save adaptation curve plot with accuracy and uncertainty.
     
     Args:
         results: Dictionary with evaluation results
@@ -387,11 +365,7 @@ def plot_adaptation_curve(
     std_accs = results['std_accuracies']
     mean_vars = results['mean_variances']
     std_vars = results['std_variances']
-    mean_vars = results['mean_variances']
-    std_vars = results['std_variances']
     
-    # Create figure with two subplots: accuracy and uncertainty
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10))
     # Create figure with two subplots: accuracy and uncertainty
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10))
     
@@ -432,40 +406,6 @@ def plot_adaptation_curve(
         verticalalignment='bottom',
         horizontalalignment='right',
         bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5)
-    )
-    
-    # ========== SUBPLOT 2: Uncertainty (Variance) ==========
-    # Plot mean variance with error bars
-    ax2.plot(timesteps, mean_vars, 'g-s', linewidth=2, markersize=8, label='Mean Variance')
-    ax2.fill_between(
-        timesteps,
-        [m - s for m, s in zip(mean_vars, std_vars)],
-        [m + s for m, s in zip(mean_vars, std_vars)],
-        alpha=0.3,
-        color='green'
-    )
-    
-    # Formatting
-    ax2.set_xlabel('Interaction Number (t)', fontsize=14)
-    ax2.set_ylabel('Posterior Variance', fontsize=14)
-    ax2.set_title('Uncertainty Reduction over Time', fontsize=16, fontweight='bold')
-    ax2.set_xticks(timesteps)
-    ax2.grid(True, alpha=0.3)
-    ax2.legend(fontsize=12)
-    
-    # Add annotation showing uncertainty reduction
-    uncertainty_reduction = results['uncertainty_reduction']
-    reduction_pct = -100 * uncertainty_reduction / results['initial_variance'] if results['initial_variance'] > 0 else 0
-    ax2.text(
-        0.98, 0.98,
-        f"Uncertainty Reduction: {reduction_pct:.1f}%\n"
-        f"Initial: {results['initial_variance']:.4f}\n"
-        f"Final: {results['final_variance']:.4f}",
-        transform=ax2.transAxes,
-        fontsize=10,
-        verticalalignment='top',
-        horizontalalignment='right',
-        bbox=dict(boxstyle='round', facecolor='lightgreen', alpha=0.5)
     )
     
     # ========== SUBPLOT 2: Uncertainty (Variance) ==========
@@ -567,11 +507,8 @@ def main():
     print(f"Seq Length: {args.seq_length}")
     print(f"Latent Dim: {args.latent_dim}")
     print(f"Hidden Dim: {args.hidden_dim}")
-    print(f"Latent Dim: {args.latent_dim}")
-    print(f"Hidden Dim: {args.hidden_dim}")
     print(f"Num Episodes: {args.num_eval_episodes}")
     print(f"Device: {args.device}")
-    print(f"Use Transformer: {args.use_transformer}")
     print(f"Use Transformer: {args.use_transformer}")
     print("="*80 + "\n")
     
@@ -615,6 +552,19 @@ def main():
             seed=args.seed
         )
         collate_fn = sequential_prism_collate_fn
+    elif "ultrafeedback" in args.data_path.lower() or "survey" in args.data_path.lower() or "P_" in args.data_path:
+        print("Using UltraFeedback dataset")
+        test_dataset = SequentialUltraFeedbackDataset(
+            data_path=args.data_path,
+            data_subset=args.data_subset,
+            split="test",
+            seq_length=args.seq_length,
+            epoch_size=args.num_eval_episodes,
+            seed=args.seed,
+            use_rolling_window=True,
+            min_contexts=2
+        )
+        collate_fn = sequential_ultrafeedback_collate_fn
     elif "hh" in args.data_path.lower():
         print("Using HH-RLHF dataset")
         test_dataset = SequentialHHDataset(
@@ -723,9 +673,6 @@ def main():
         "eval/initial_variance": results['initial_variance'],
         "eval/final_variance": results['final_variance'],
         "eval/uncertainty_reduction": results['uncertainty_reduction'],
-        "eval/initial_variance": results['initial_variance'],
-        "eval/final_variance": results['final_variance'],
-        "eval/uncertainty_reduction": results['uncertainty_reduction'],
     })
     
     # Log per-timestep accuracies and variances as a table
@@ -741,12 +688,6 @@ def main():
     # Log adaptation curve as image
     wandb.log({"eval/adaptation_curve": wandb.Image(plot_path)})
     
-    # Log per-timestep accuracies and variances as line plots
-    for t, (acc, var) in enumerate(zip(results['mean_accuracies'], results['mean_variances'])):
-        wandb.log({
-            "eval/accuracy_by_timestep": acc,
-            "eval/variance_by_timestep": var
-        }, step=t)
     # Log per-timestep accuracies and variances as line plots
     for t, (acc, var) in enumerate(zip(results['mean_accuracies'], results['mean_variances'])):
         wandb.log({
