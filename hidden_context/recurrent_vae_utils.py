@@ -560,20 +560,16 @@ class TransformerVAEModel(nn.Module):
         for t in range(seq_len):
             e_chosen = embeddings_chosen[:, t, :]
             e_rejected = embeddings_rejected[:, t, :]
-            # Contrastive encoding: [chosen, rejected, interaction, difference]
-            pair = torch.cat([
-                e_chosen, 
-                e_rejected, 
-                e_chosen * e_rejected,  # Interaction
-                e_chosen - e_rejected   # Difference
-            ], dim=-1)  # [batch, 4*embed_dim]
-            # Contrastive encoding: [chosen, rejected, interaction, difference]
-            pair = torch.cat([
-                e_chosen, 
-                e_rejected, 
-                e_chosen * e_rejected,  # Interaction
-                e_chosen - e_rejected   # Difference
-            ], dim=-1)  # [batch, 4*embed_dim]
+            # Optionally apply contrastive encoding (must match model architecture)
+            if self.encoder.use_contrastive:
+                pair = torch.cat([
+                    e_chosen, 
+                    e_rejected, 
+                    e_chosen * e_rejected,  # Interaction
+                    e_chosen - e_rejected   # Difference
+                ], dim=-1)  # [batch, 4*embed_dim]
+            else:
+                pair = torch.cat([e_chosen, e_rejected], dim=-1)  # [batch, 2*embed_dim]
             pair_encoded = self.encoder.pair_encoder(pair)  # [batch, hidden_dim]
             all_pairs.append(pair_encoded)
         
