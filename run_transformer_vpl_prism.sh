@@ -61,8 +61,8 @@ RUN_ID="slurm_${SLURM_JOB_ID:-local}"
 #########################
 
 SEQ_LENGTH=${1:-6}
-LATENT_DIM=${2:-128}
-HIDDEN_DIM=${3:-512}
+LATENT_DIM=${2:-64}
+HIDDEN_DIM=${3:-256}
 BETA_MAX=${4:-0.1}
 NUM_HEADS=${5:-4}
 NUM_LAYERS=${6:-2}
@@ -70,6 +70,7 @@ SEED=${7:-0}
 EPOCH_SIZE=${8:-4000}
 FREE_BITS=${9:-6.4}
 DATA_SUBSET=${10:-both}
+ALLOW_KL_GRADIENT_FLOW=${11:-False}
 # Fixed hyperparameters
 CYCLES=4
 GAMMA=1.1
@@ -125,7 +126,8 @@ python -m hidden_context.train_streaming_vpl \
     --log_dir experiments/streaming_vpl_prism \
     --seed ${SEED} \
     --bf16 True \
-    --run_id ${RUN_ID}
+    --run_id ${RUN_ID} \
+    --allow_kl_gradient_flow ${ALLOW_KL_GRADIENT_FLOW}
 
 echo ""
 echo "========================================="

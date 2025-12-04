@@ -678,9 +678,6 @@ class RecurrentVAETrainer(Trainer):
         total_kl = 0.0
         num_valid_steps = 0  # Count non-padded steps
         
-<<<<<<< Updated upstream
-        # KL annealer is stepped in on_step_end, not here
-=======
         # Step annealer during training (on_step_end not reliably called)
         if model.training and not return_outputs:
             self.kl_annealer.step()
@@ -688,7 +685,6 @@ class RecurrentVAETrainer(Trainer):
             if self.kl_annealer.current_step % 100 == 0:
                 print(f"[DEBUG RECURRENT] Annealer stepped to {self.kl_annealer.current_step}, model.training={model.training}, return_outputs={return_outputs}")
         
->>>>>>> Stashed changes
         beta = self.kl_annealer.get_beta()
         
         # Debug logging for beta value every 100 steps
@@ -959,14 +955,10 @@ class TransformerVAETrainer(Trainer):
         
         if model.training and not return_outputs:
             self.kl_annealer.step()
-<<<<<<< Updated upstream
-        # KL annealer is stepped in on_step_end, not here
-=======
             # Debug logging every 100 steps
             if self.kl_annealer.current_step % 100 == 0:
                 print(f"[DEBUG TRANSFORMER] Annealer stepped to {self.kl_annealer.current_step}, model.training={model.training}, return_outputs={return_outputs}")
         
->>>>>>> Stashed changes
         beta = self.kl_annealer.get_beta()
         
         # Debug logging for beta value every 100 steps
