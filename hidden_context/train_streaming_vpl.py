@@ -421,4 +421,5 @@ if __name__ == "__main__":
     
     print(f"Model saved to: {model_path}")
     print(f"Config saved to: {config_path}")
+    print(f"Config saved to: {config_path}")
     print("\nTraining complete!")

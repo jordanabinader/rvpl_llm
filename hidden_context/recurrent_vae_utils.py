@@ -555,10 +555,18 @@ class TransformerVAEModel(nn.Module):
         device = embeddings_chosen.device
         
         # Encode all observation pairs first (with contrastive features)
+        # Encode all observation pairs first (with contrastive features)
         all_pairs = []
         for t in range(seq_len):
             e_chosen = embeddings_chosen[:, t, :]
             e_rejected = embeddings_rejected[:, t, :]
+            # Contrastive encoding: [chosen, rejected, interaction, difference]
+            pair = torch.cat([
+                e_chosen, 
+                e_rejected, 
+                e_chosen * e_rejected,  # Interaction
+                e_chosen - e_rejected   # Difference
+            ], dim=-1)  # [batch, 4*embed_dim]
             # Contrastive encoding: [chosen, rejected, interaction, difference]
             pair = torch.cat([
                 e_chosen, 
@@ -711,6 +719,10 @@ class RecurrentVAETrainer(Trainer):
         if not return_outputs and hasattr(self, 'state') and self.state.global_step % 100 == 0:
             print(f"[DEBUG RECURRENT] Step {self.state.global_step}: beta={beta:.6f}, annealer.current_step={self.kl_annealer.current_step}")
         
+        # Debug logging for beta value every 100 steps
+        if not return_outputs and hasattr(self, 'state') and self.state.global_step % 100 == 0:
+            print(f"[DEBUG RECURRENT] Step {self.state.global_step}: beta={beta:.6f}, annealer.current_step={self.kl_annealer.current_step}")
+        
         if return_outputs:
             all_rewards_chosen, all_rewards_rejected = [], []
             all_mu, all_logvar = [], []
@@ -789,6 +801,16 @@ class RecurrentVAETrainer(Trainer):
             next_mu = torch.clamp(next_mu, -1, 1)
             next_logvar = torch.clamp(next_logvar, -1, 1)
             
+            # Fix #6: Optionally allow gradients through KL prior for smoother trajectories
+            # If allow_kl_gradient_flow=True, the model can optimize belief at t-1 
+            # to make it easier to transition to belief at t
+            # If False (default), treat previous belief as fixed target (more stable)
+            if self.allow_kl_gradient_flow:
+                prev_mu = curr_mu  # Allow gradients to flow back
+                prev_logvar = curr_logvar
+            else:
+                prev_mu = curr_mu.detach()  # Treat as fixed target
+                prev_logvar = curr_logvar.detach()
             # Fix #6: Optionally allow gradients through KL prior for smoother trajectories
             # If allow_kl_gradient_flow=True, the model can optimize belief at t-1 
             # to make it easier to transition to belief at t
@@ -951,10 +973,17 @@ class TransformerVAETrainer(Trainer):
         
         # Encode all observation pairs (done once, reused for all timesteps)
         # Use contrastive encoding: [chosen, rejected, interaction, difference]
+        # Use contrastive encoding: [chosen, rejected, interaction, difference]
         all_pairs = []
         for t in range(seq_len):
             e_chosen = embeddings_chosen[:, t, :]
             e_rejected = embeddings_rejected[:, t, :]
+            pair = torch.cat([
+                e_chosen, 
+                e_rejected, 
+                e_chosen * e_rejected,  # Interaction
+                e_chosen - e_rejected   # Difference
+            ], dim=-1)
             pair = torch.cat([
                 e_chosen, 
                 e_rejected, 
@@ -981,8 +1010,15 @@ class TransformerVAETrainer(Trainer):
             # Debug logging every 100 steps
             if self.kl_annealer.current_step % 100 == 0:
                 print(f"[DEBUG TRANSFORMER] Annealer stepped to {self.kl_annealer.current_step}, model.training={model.training}, return_outputs={return_outputs}")
+            # Debug logging every 100 steps
+            if self.kl_annealer.current_step % 100 == 0:
+                print(f"[DEBUG TRANSFORMER] Annealer stepped to {self.kl_annealer.current_step}, model.training={model.training}, return_outputs={return_outputs}")
         
         beta = self.kl_annealer.get_beta()
+        
+        # Debug logging for beta value every 100 steps
+        if not return_outputs and hasattr(self, 'state') and self.state.global_step % 100 == 0:
+            print(f"[DEBUG TRANSFORMER] Step {self.state.global_step}: beta={beta:.6f}, annealer.current_step={self.kl_annealer.current_step}")
         
         # Debug logging for beta value every 100 steps
         if not return_outputs and hasattr(self, 'state') and self.state.global_step % 100 == 0:
@@ -1060,6 +1096,13 @@ class TransformerVAETrainer(Trainer):
                 num_valid_steps += 1
             
             # Update previous belief for next iteration
+            # Optionally allow gradients to flow back through KL prior
+            if self.allow_kl_gradient_flow:
+                prev_mu = curr_mu  # Allow gradients
+                prev_logvar = curr_logvar
+            else:
+                prev_mu = curr_mu.detach()  # Fixed target (default)
+                prev_logvar = curr_logvar.detach()
             # Optionally allow gradients to flow back through KL prior
             if self.allow_kl_gradient_flow:
                 prev_mu = curr_mu  # Allow gradients
