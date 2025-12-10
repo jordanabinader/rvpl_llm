@@ -514,7 +514,7 @@ if __name__ == "__main__":
         if script_args.tokenizer_name is not None
         else script_args.model_name
     )
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, use_auth_token=True, add_eos_token=False)
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, add_eos_token=False)
 
     peft_config = LoraConfig(
         task_type=TaskType.SEQ_CLS,

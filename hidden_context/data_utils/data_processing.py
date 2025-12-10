@@ -100,13 +100,13 @@ def generate_embeddings_with_llm(args, input_dataset=None):
         )
 
     if args.model_type == "gpt2":
-        tokenizer = AutoTokenizer.from_pretrained("gpt2", use_auth_token=True)
+        tokenizer = AutoTokenizer.from_pretrained("gpt2")
         model = AutoModelForSequenceClassification.from_pretrained(
             "gpt2", num_labels=args.embed_dim, torch_dtype=torch.bfloat16
         )
         model.score.weight.data *= 0.01
     elif args.model_type == "llama" or args.model_type == "meta-llama/Llama-2-7b-hf":
-        tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-2-7b-hf", use_auth_token=True, add_eos_token=False)
+        tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-2-7b-hf", add_eos_token=False)
         model = AutoModelForCausalLM.from_pretrained(
             "meta-llama/Llama-2-7b-hf", torch_dtype=torch.bfloat16
         )

@@ -22,7 +22,7 @@ DATA_PATH="data_release/hh_rlhf/gpt2/"
 DATA_SUBSET="both"  # 'harmless', 'helpful', or 'both'
 LOG_DIR="experiments/vpl_baseline_hh"
 
-# Train original VPL baseline on PRISM dataset
+# Train original VPL baseline on HH-RLHF dataset
 python -m hidden_context.train_llm_vae_preference_model \
     --model_name=${MODEL_NAME} \
     --data_path=${DATA_PATH} \

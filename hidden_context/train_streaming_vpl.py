@@ -22,6 +22,7 @@ from transformers import (
 from .data_utils.sequential_pets_dataset import SequentialPetsDataset, sequential_collate_fn
 from .data_utils.sequential_hh_dataset import SequentialHHDataset, sequential_hh_collate_fn
 from .data_utils.sequential_prism_dataset import SequentialPRISMDataset, sequential_prism_collate_fn
+from .data_utils.sequential_ultrafeedback_dataset import SequentialUltraFeedbackDataset, sequential_ultrafeedback_collate_fn
 from .recurrent_vae_utils import (
     RecurrentVAEModel, RecurrentVAETrainer,
     TransformerVAEModel, TransformerVAETrainer
@@ -39,7 +40,7 @@ class ScriptArguments:
     )
     data_subset: str = field(
         default="both",
-        metadata={"help": "Which subset to use: 'harmless', 'helpful', or 'both'"}
+        metadata={"help": "Which subset to use: 'harmless', 'helpful', 'both' (for HH), '1', '2', '4', '8', 'all' (for UltraFeedback)"}
     )
     
     # Model arguments
@@ -226,6 +227,32 @@ if __name__ == "__main__":
             use_turn_order=True
         )
         collate_fn = sequential_prism_collate_fn
+    elif "ultrafeedback" in script_args.data_path.lower() or "survey" in script_args.data_path.lower() or "P_" in script_args.data_path:
+        print("Using UltraFeedback dataset (multi-aspect user preferences with contexts)")
+        train_dataset = SequentialUltraFeedbackDataset(
+            data_path=script_args.data_path,
+            data_subset=script_args.data_subset,
+            split="train",
+            seq_length=script_args.seq_length,
+            epoch_size=script_args.epoch_size,
+            seed=script_args.seed,
+            use_hard_negatives=True,
+            use_rolling_window=True,
+            min_contexts=2
+        )
+        
+        eval_dataset = SequentialUltraFeedbackDataset(
+            data_path=script_args.data_path,
+            data_subset=script_args.data_subset,
+            split="test",
+            seq_length=script_args.seq_length,
+            epoch_size=script_args.epoch_size // 5,  # Smaller eval set
+            seed=script_args.seed + 1,
+            use_hard_negatives=True,
+            use_rolling_window=True,
+            min_contexts=2
+        )
+        collate_fn = sequential_ultrafeedback_collate_fn
     elif "hh" in script_args.data_path.lower():
         print("Using HH-RLHF dataset (helpful/harmless preferences)")
         train_dataset = SequentialHHDataset(
