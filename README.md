@@ -2,7 +2,7 @@
 
 **Author**: Jordan Abi Nader, MIT CSAIL  
 **Course**: 6.7920 (Reinforcement Learning)  
-**Term**: Fall 2024
+**Term**: Fall 2025
 
 ---
 
