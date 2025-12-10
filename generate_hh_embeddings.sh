@@ -20,7 +20,7 @@
 
 module load miniforge                   # or your Python module
 # conda activate rvpl_llm               # if you have a conda env
-
+source venv/bin/activate
 echo "Node: $(hostname)"
 echo "GPUs visible to this job:"
 nvidia-smi || echo "nvidia-smi not found"
@@ -36,7 +36,7 @@ echo "========================================="
 python generate_hh_embeddings.py \
     --input_dir data/relabeled_hh_rlhf \
     --output_dir data_release/hh_rlhf/gpt2 \
-    --data_subset both \
+    --data_subset harmless \
     --embed_dim 768 \
     --max_length 512 \
     --batch_size 8
